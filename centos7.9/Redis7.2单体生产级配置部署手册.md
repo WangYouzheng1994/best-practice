@@ -53,7 +53,8 @@
 7. 必须配置持久化策略，或者明确声明该实例是可丢失缓存；
 8. 必须由 systemd 托管并设置开机自启；
 9. 必须限制访问来源 IP；
-10. 必须完成启动验证、持久化验证、安全验证和资源限制验证。
+10. 必须完成启动验证、持久化验证、安全验证和资源限制验证；
+11. 禁止使用 Redis 默认端口 `6379`，必须遵循《服务器端口统一规划规范.md》，默认使用 `16300 ~ 16399` 端口段，单体标准端口为 `16379`。
 
 ---
 
@@ -342,7 +343,7 @@ always-show-logo no
 # 将 10.10.10.10 替换为本机实际内网 IP
 bind 127.0.0.1 10.10.10.10
 protected-mode yes
-port 6379
+port 16379
 tcp-backlog 511
 timeout 300
 tcp-keepalive 300
@@ -353,7 +354,7 @@ tcp-keepalive 300
 ```conf
 bind 127.0.0.1
 protected-mode yes
-port 6379
+port 16379
 ```
 
 不允许作为生产默认值：
@@ -600,13 +601,13 @@ aclfile /etc/redis/users.acl
 应用应使用 ACL 用户名和密码连接：
 
 ```text
-redis://app:ReplaceWith_App_StrongPassword_2026@10.10.10.10:6379/0
+redis://app:ReplaceWith_App_StrongPassword_2026@10.10.10.10:16379/0
 ```
 
 监控工具使用：
 
 ```text
-redis://monitor:ReplaceWith_Monitor_StrongPassword_2026@10.10.10.10:6379/0
+redis://monitor:ReplaceWith_Monitor_StrongPassword_2026@10.10.10.10:16379/0
 ```
 
 ### 7.4 redis-cli 安全连接方式
@@ -621,14 +622,14 @@ redis-cli -a ReplaceWith_App_StrongPassword_2026 ping
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
-redis-cli -h 10.10.10.10 -p 6379 --user app ping
+redis-cli -h 10.10.10.10 -p 16379 --user app ping
 unset REDISCLI_AUTH
 ```
 
 也可以使用交互方式：
 
 ```bash
-redis-cli -h 10.10.10.10 -p 6379 --user app
+redis-cli -h 10.10.10.10 -p 16379 --user app
 AUTH app ReplaceWith_App_StrongPassword_2026
 ```
 
@@ -681,7 +682,7 @@ systemctl enable redis
 
 ## 9. 防火墙与网络访问控制
 
-生产 Redis 不允许公网访问，只允许应用服务器、运维跳板机、监控服务器访问。
+生产 Redis 不允许公网访问，只允许应用服务器、运维跳板机、监控服务器访问。端口规划必须遵循《服务器端口统一规划规范.md》，单体 Redis 标准端口为 `16379`，多实例应在 `16300 ~ 16399` 端口段内分配。
 
 ### 9.1 firewalld 示例
 
@@ -690,7 +691,7 @@ systemctl enable redis
 ```bash
 firewall-cmd --permanent --new-zone=redis
 firewall-cmd --permanent --zone=redis --add-source=10.10.20.0/24
-firewall-cmd --permanent --zone=redis --add-port=6379/tcp
+firewall-cmd --permanent --zone=redis --add-port=16379/tcp
 firewall-cmd --reload
 firewall-cmd --zone=redis --list-all
 ```
@@ -700,7 +701,7 @@ firewall-cmd --zone=redis --list-all
 ```bash
 firewall-cmd --permanent --new-zone=redis
 firewall-cmd --permanent --zone=redis --add-source=10.10.20.15/32
-firewall-cmd --permanent --zone=redis --add-port=6379/tcp
+firewall-cmd --permanent --zone=redis --add-port=16379/tcp
 firewall-cmd --reload
 ```
 
@@ -710,13 +711,13 @@ firewall-cmd --reload
 
 | 方向 | 协议 | 端口 | 来源 |
 |---|---|---:|---|
-| 入站 | TCP | 6379 | 应用服务器内网 IP 或应用网段 |
-| 入站 | TCP | 6379 | 监控服务器内网 IP |
+| 入站 | TCP | 16379 | 应用服务器内网 IP 或应用网段 |
+| 入站 | TCP | 16379 | 监控服务器内网 IP |
 
 禁止：
 
 ```text
-0.0.0.0/0 -> 6379
+0.0.0.0/0 -> 16379
 ```
 
 ---
@@ -740,7 +741,7 @@ less /data/redis/logs/redis.log
 ### 10.2 端口监听验证
 
 ```bash
-ss -lntp | grep 6379
+ss -lntp | grep 16379
 ```
 
 期望只监听 `127.0.0.1` 和指定内网 IP，不应出现公网地址或无约束监听。
@@ -750,7 +751,7 @@ ss -lntp | grep 6379
 未认证访问应失败：
 
 ```bash
-redis-cli -h 10.10.10.10 -p 6379 ping
+redis-cli -h 10.10.10.10 -p 16379 ping
 ```
 
 期望返回：
@@ -763,7 +764,7 @@ NOAUTH Authentication required.
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
-redis-cli -h 10.10.10.10 -p 6379 --user app ping
+redis-cli -h 10.10.10.10 -p 16379 --user app ping
 unset REDISCLI_AUTH
 ```
 
@@ -779,7 +780,7 @@ PONG
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
-redis-cli -h 10.10.10.10 -p 6379 --user app CONFIG GET '*'
+redis-cli -h 10.10.10.10 -p 16379 --user app CONFIG GET '*'
 unset REDISCLI_AUTH
 ```
 
@@ -789,7 +790,7 @@ unset REDISCLI_AUTH
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_Monitor_StrongPassword_2026'
-redis-cli -h 10.10.10.10 -p 6379 --user monitor INFO server
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server
 unset REDISCLI_AUTH
 ```
 
@@ -799,8 +800,8 @@ unset REDISCLI_AUTH
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
-redis-cli -h 10.10.10.10 -p 6379 --user app SET prod:check ok EX 300
-redis-cli -h 10.10.10.10 -p 6379 --user app GET prod:check
+redis-cli -h 10.10.10.10 -p 16379 --user app SET prod:check ok EX 300
+redis-cli -h 10.10.10.10 -p 16379 --user app GET prod:check
 unset REDISCLI_AUTH
 ```
 
@@ -808,7 +809,7 @@ unset REDISCLI_AUTH
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_Monitor_StrongPassword_2026'
-redis-cli -h 10.10.10.10 -p 6379 --user monitor INFO persistence
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO persistence
 unset REDISCLI_AUTH
 ```
 
@@ -899,13 +900,13 @@ journalctl -u redis -n 100 --no-pager
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_Monitor_StrongPassword_2026'
-redis-cli -h 10.10.10.10 -p 6379 --user monitor INFO server
-redis-cli -h 10.10.10.10 -p 6379 --user monitor INFO clients
-redis-cli -h 10.10.10.10 -p 6379 --user monitor INFO memory
-redis-cli -h 10.10.10.10 -p 6379 --user monitor INFO stats
-redis-cli -h 10.10.10.10 -p 6379 --user monitor INFO persistence
-redis-cli -h 10.10.10.10 -p 6379 --user monitor SLOWLOG LEN
-redis-cli -h 10.10.10.10 -p 6379 --user monitor SLOWLOG GET 10
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO clients
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO memory
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO stats
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO persistence
+redis-cli -h 10.10.10.10 -p 16379 --user monitor SLOWLOG LEN
+redis-cli -h 10.10.10.10 -p 16379 --user monitor SLOWLOG GET 10
 unset REDISCLI_AUTH
 ```
 

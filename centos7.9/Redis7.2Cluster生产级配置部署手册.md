@@ -48,6 +48,7 @@ Redis Cluster 生产原则：
 6. **所有节点配置应保持一致。** 除 `bind`、`cluster-announce-ip`、日志路径等节点身份信息外，核心配置应统一。
 7. **必须预留扩容容量。** Redis Cluster 扩容涉及 slot 迁移，生产应低峰操作。
 8. **Redis Cluster 不等于强一致存储。** 主从复制仍是异步复制，故障时可能丢失少量已确认写入。
+9. **禁止使用 Redis 默认端口 `6379`。** Redis 服务端口必须遵循《服务器端口统一规划规范.md》，默认使用 `16300 ~ 16399` 端口段，Cluster 标准服务端口为 `16379`；Cluster Bus 使用 `36300 ~ 36399` 端口段，标准端口为 `36379`。
 
 不适合 Redis Cluster 的场景：
 
@@ -64,12 +65,12 @@ Redis Cluster 生产原则：
 
 | 节点 | 角色 | 主机名 | 内网 IP | Redis 端口 | Cluster Bus 端口 |
 |---|---|---|---|---:|---:|
-| node-1 | Master | redis-cluster-01 | 10.10.30.11 | 6379 | 16379 |
-| node-2 | Master | redis-cluster-02 | 10.10.30.12 | 6379 | 16379 |
-| node-3 | Master | redis-cluster-03 | 10.10.30.13 | 6379 | 16379 |
-| node-4 | Replica | redis-cluster-04 | 10.10.30.14 | 6379 | 16379 |
-| node-5 | Replica | redis-cluster-05 | 10.10.30.15 | 6379 | 16379 |
-| node-6 | Replica | redis-cluster-06 | 10.10.30.16 | 6379 | 16379 |
+| node-1 | Master | redis-cluster-01 | 10.10.30.11 | 16379 | 36379 |
+| node-2 | Master | redis-cluster-02 | 10.10.30.12 | 16379 | 36379 |
+| node-3 | Master | redis-cluster-03 | 10.10.30.13 | 16379 | 36379 |
+| node-4 | Replica | redis-cluster-04 | 10.10.30.14 | 16379 | 36379 |
+| node-5 | Replica | redis-cluster-05 | 10.10.30.15 | 16379 | 36379 |
+| node-6 | Replica | redis-cluster-06 | 10.10.30.16 | 16379 | 36379 |
 
 Redis Cluster 默认有 `16384` 个 hash slot，创建集群时会分配到 3 个 master：
 
@@ -109,8 +110,8 @@ done
 
 ```bash
 for ip in 10.10.30.11 10.10.30.12 10.10.30.13 10.10.30.14 10.10.30.15 10.10.30.16; do
-  nc -vz $ip 6379
   nc -vz $ip 16379
+  nc -vz $ip 36379
 done
 ```
 
@@ -171,7 +172,7 @@ always-show-logo no
 # ==== 网络 ====
 bind 127.0.0.1 10.10.30.11
 protected-mode yes
-port 6379
+port 16379
 tcp-backlog 511
 timeout 300
 tcp-keepalive 300
@@ -181,12 +182,12 @@ aclfile /etc/redis/users.acl
 
 # ==== Cluster ====
 cluster-enabled yes
-cluster-config-file /data/redis/data/nodes-6379.conf
+cluster-config-file /data/redis/data/nodes-16379.conf
 cluster-node-timeout 15000
-cluster-port 16379
+cluster-port 36379
 cluster-announce-ip 10.10.30.11
-cluster-announce-port 6379
-cluster-announce-bus-port 16379
+cluster-announce-port 16379
+cluster-announce-bus-port 36379
 cluster-require-full-coverage yes
 cluster-allow-reads-when-down no
 cluster-migration-barrier 1
@@ -257,7 +258,7 @@ replica-lazy-flush yes
 | `cluster-enabled` | `yes` | 启用 Redis Cluster |
 | `cluster-config-file` | 数据目录下 | Redis 自动维护，不能多人手工编辑 |
 | `cluster-node-timeout` | `15000` | 节点失联判定基础超时时间，单位毫秒 |
-| `cluster-port` | `16379` | Cluster Bus 端口 |
+| `cluster-port` | `36379` | Cluster Bus 端口 |
 | `cluster-announce-ip` | 本机内网 IP | 节点对外声明地址，NAT/多网卡环境必须显式设置 |
 | `cluster-require-full-coverage` | `yes` | 任意 slot 不可用时集群停止服务，避免部分数据不可用但业务误以为成功 |
 | `cluster-allow-reads-when-down` | `no` | 集群不可用时禁止继续读，避免读到不一致数据 |
@@ -289,7 +290,7 @@ redis-cli 操作时不建议使用 `-a` 明文参数，推荐：
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.11 -p 6379 --user clusteradmin CLUSTER INFO
+redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER INFO
 unset REDISCLI_AUTH
 ```
 
@@ -338,10 +339,10 @@ Redis Cluster 必须开放两个端口：
 
 | 端口 | 用途 | 访问来源 |
 |---:|---|---|
-| 6379 | Redis 客户端端口 | 应用服务器、Redis 集群节点、监控节点、运维跳板机 |
-| 16379 | Cluster Bus 端口 | 仅 Redis 集群节点之间 |
+| 16379 | Redis 客户端端口 | 应用服务器、Redis 集群节点、监控节点、运维跳板机 |
+| 36379 | Cluster Bus 端口 | 仅 Redis 集群节点之间 |
 
-> 如果 Redis 端口不是 6379，Cluster Bus 默认通常是 Redis 端口 + 10000。本文显式配置 `cluster-port 16379`，避免歧义。
+> 端口规划必须遵循《服务器端口统一规划规范.md》。Redis Cluster 服务端口使用 `16379`，Cluster Bus 端口使用 `36379`，不得回退到默认端口 `6379`。
 
 firewalld 示例：
 
@@ -349,8 +350,8 @@ firewalld 示例：
 firewall-cmd --permanent --new-zone=redis-cluster
 firewall-cmd --permanent --zone=redis-cluster --add-source=10.10.30.0/24
 firewall-cmd --permanent --zone=redis-cluster --add-source=10.10.20.0/24
-firewall-cmd --permanent --zone=redis-cluster --add-port=6379/tcp
 firewall-cmd --permanent --zone=redis-cluster --add-port=16379/tcp
+firewall-cmd --permanent --zone=redis-cluster --add-port=36379/tcp
 firewall-cmd --reload
 firewall-cmd --zone=redis-cluster --list-all
 ```
@@ -380,7 +381,7 @@ systemctl status redis --no-pager
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -h 10.10.30.11 -p 6379 --user clusteradmin CLUSTER INFO
+redis-cli -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER INFO
 unset REDISCLI_AUTH
 ```
 
@@ -393,12 +394,12 @@ unset REDISCLI_AUTH
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
 redis-cli --cluster create \
-  10.10.30.11:6379 \
-  10.10.30.12:6379 \
-  10.10.30.13:6379 \
-  10.10.30.14:6379 \
-  10.10.30.15:6379 \
-  10.10.30.16:6379 \
+  10.10.30.11:16379 \
+  10.10.30.12:16379 \
+  10.10.30.13:16379 \
+  10.10.30.14:16379 \
+  10.10.30.15:16379 \
+  10.10.30.16:16379 \
   --cluster-replicas 1 \
   --cluster-yes \
   --user clusteradmin
@@ -416,7 +417,7 @@ unset REDISCLI_AUTH
 业务客户端必须启用 Cluster 模式，并配置多个 startup nodes：
 
 ```text
-10.10.30.11:6379,10.10.30.12:6379,10.10.30.13:6379,10.10.30.14:6379,10.10.30.15:6379,10.10.30.16:6379
+10.10.30.11:16379,10.10.30.12:16379,10.10.30.13:16379,10.10.30.14:16379,10.10.30.15:16379,10.10.30.16:16379
 username: app
 password: ReplaceWith_App_StrongPassword_2026
 cluster mode: enabled
@@ -426,8 +427,8 @@ redis-cli 访问集群必须使用 `-c`：
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
-redis-cli -c -h 10.10.30.11 -p 6379 --user app SET cluster:check ok EX 300
-redis-cli -c -h 10.10.30.11 -p 6379 --user app GET cluster:check
+redis-cli -c -h 10.10.30.11 -p 16379 --user app SET cluster:check ok EX 300
+redis-cli -c -h 10.10.30.11 -p 16379 --user app GET cluster:check
 unset REDISCLI_AUTH
 ```
 
@@ -439,8 +440,8 @@ unset REDISCLI_AUTH
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.11 -p 6379 --user clusteradmin CLUSTER INFO
-redis-cli -c -h 10.10.30.11 -p 6379 --user clusteradmin CLUSTER NODES
+redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER INFO
+redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER NODES
 unset REDISCLI_AUTH
 ```
 
@@ -458,7 +459,7 @@ cluster_size:3
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli --cluster check 10.10.30.11:6379 --user clusteradmin
+redis-cli --cluster check 10.10.30.11:16379 --user clusteradmin
 unset REDISCLI_AUTH
 ```
 
@@ -509,7 +510,7 @@ MSET user:{1001}:name a user:{1001}:age 20
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.11 -p 6379 --user clusteradmin CLUSTER NODES
+redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER NODES
 unset REDISCLI_AUTH
 ```
 
@@ -523,8 +524,8 @@ systemctl stop redis
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.12 -p 6379 --user clusteradmin CLUSTER INFO
-redis-cli -c -h 10.10.30.12 -p 6379 --user clusteradmin CLUSTER NODES
+redis-cli -c -h 10.10.30.12 -p 16379 --user clusteradmin CLUSTER INFO
+redis-cli -c -h 10.10.30.12 -p 16379 --user clusteradmin CLUSTER NODES
 unset REDISCLI_AUTH
 ```
 
@@ -546,7 +547,7 @@ systemctl start redis
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.12 -p 6379 --user clusteradmin CLUSTER NODES
+redis-cli -c -h 10.10.30.12 -p 16379 --user clusteradmin CLUSTER NODES
 unset REDISCLI_AUTH
 ```
 
@@ -579,8 +580,8 @@ Redis Cluster 故障切换不是强一致切换。以下情况可能产生数据
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli --cluster add-node 10.10.30.17:6379 10.10.30.11:6379 --user clusteradmin
-redis-cli --cluster reshard 10.10.30.11:6379 --user clusteradmin
+redis-cli --cluster add-node 10.10.30.17:16379 10.10.30.11:16379 --user clusteradmin
+redis-cli --cluster reshard 10.10.30.11:16379 --user clusteradmin
 unset REDISCLI_AUTH
 ```
 
@@ -590,8 +591,8 @@ unset REDISCLI_AUTH
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli --cluster reshard 10.10.30.11:6379 --user clusteradmin
-redis-cli --cluster del-node 10.10.30.11:6379 <node-id> --user clusteradmin
+redis-cli --cluster reshard 10.10.30.11:16379 --user clusteradmin
+redis-cli --cluster del-node 10.10.30.11:16379 <node-id> --user clusteradmin
 unset REDISCLI_AUTH
 ```
 
@@ -651,9 +652,9 @@ Cluster 只能按 key 分片，不能拆分单个大 key。生产应避免：
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.11 -p 6379 --user clusteradmin CLUSTER INFO
-redis-cli -c -h 10.10.30.11 -p 6379 --user clusteradmin CLUSTER NODES
-redis-cli --cluster check 10.10.30.11:6379 --user clusteradmin
+redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER INFO
+redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER NODES
+redis-cli --cluster check 10.10.30.11:16379 --user clusteradmin
 unset REDISCLI_AUTH
 ```
 
@@ -738,8 +739,8 @@ systemctl status redis --no-pager
 
 ```bash
 export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.11 -p 6379 --user clusteradmin CLUSTER INFO
-redis-cli --cluster check 10.10.30.11:6379 --user clusteradmin
+redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER INFO
+redis-cli --cluster check 10.10.30.11:16379 --user clusteradmin
 unset REDISCLI_AUTH
 ```
 

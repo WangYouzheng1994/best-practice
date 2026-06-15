@@ -152,13 +152,13 @@ cp /data/module/redis7.2.14/conf/redis.conf /data/module/redis7.2.14/conf/redis.
 ```bash
 cat > /data/module/redis7.2.14/conf/redis-local.conf << 'EOF'
 bind 0.0.0.0
-port 6379
+port 16379
 protected-mode yes
 requirepass ChangeMe_StrongPassword
 
 daemonize yes
 supervised no
-pidfile /data/module/redis7.2.14/redis_6379.pid
+pidfile /data/module/redis7.2.14/redis_16379.pid
 
 loglevel notice
 logfile /data/module/redis7.2.14/logs/redis.log
@@ -219,7 +219,7 @@ chmod 640 /data/module/redis7.2.14/conf/redis-local.conf
 
 ```bash
 ps -ef | grep redis-server | grep -v grep
-ss -lntp | grep 6379
+ss -lntp | grep 16379
 ```
 
 ### 3. 验证客户端连接
