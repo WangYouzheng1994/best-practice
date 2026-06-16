@@ -163,6 +163,42 @@ dmidecode -s system-product-name 2>/dev/null || true
 
 > **强制要求：** 涉及 SSH、防火墙、NetworkManager、`/etc/fstab`、`sysctl`、Docker 网络、SELinux 的配置，必须先备份、再验证、最后保留回滚路径。生产环境不要把 `cat >`、`cat >>`、`sed -i` 当作可无限重复执行的幂等命令。
 
+### 1.2 数据盘挂载点与目录规范
+
+**目的：** 统一生产服务器数据盘目录语义，避免软件安装目录、业务数据目录、日志目录和备份目录混用。
+
+本文统一以 `/data` 作为示例数据盘挂载点。`/data` 只是挂载点名称，不是强制标准；如果实际服务器数据盘挂载到 `/data1`、`/mnt/data`、`/u01` 等路径，应按现场挂载点整体替换，并在部署文档和资产台账中保持一致。
+
+推荐目录规范：
+
+| 目录 | 用途 | 示例 |
+|---|---|---|
+| `/data/module` | 软件安装目录、版本目录、当前版本软链接，以及应用自包含目录 | `/data/module/mysql`、`/data/module/redis7.2` |
+| `/data/soft` | 软件包、安装包、离线依赖包暂存目录，可选 | `/data/soft/*.tar.gz` |
+| `/data/module/{应用}` | 单个应用的配置、数据、日志、运行时文件、备份聚合目录 | `/data/module/redis7.2/{conf,data,logs,run,backup}` |
+
+目录使用原则：
+
+1. `/data` 只是示例数据盘挂载点，不代表所有服务器都必须叫 `/data`；
+2. 单个应用的配置、数据、日志、运行时文件和备份优先聚合在自己的应用目录下；
+3. Redis 等中间件可采用 `/data/module/{当前版本软链接}/{conf,data,logs,run,backup}`；
+4. 软件包、源码包、离线依赖包可临时放在 `/data/soft`，也可按团队现状放在 `/data/module`，但应避免与运行数据混淆；
+5. 生产服务进程不应拥有配置文件写权限，配置文件建议 `root:{服务用户}`、`640` 或按服务要求最小授权。
+
+示例：
+
+```text
+/data/module/redis7.2.14/
+/data/module/redis7.2 -> /data/module/redis7.2.14
+/data/module/redis7.2/conf
+/data/module/redis7.2/data
+/data/module/redis7.2/logs
+/data/module/redis7.2/run
+/data/module/redis7.2/backup
+```
+
+> **注意：** 历史服务器如果已经使用 `/etc`、`/data/data`、`/data/logs`、`/run` 等旧目录，生产环境不要为了目录统一强行迁移。新部署按本文规范执行；历史实例可在维护窗口评估迁移收益、风险和回滚方案后再处理。
+
 ---
 
 ## 2. Yum 镜像源配置
