@@ -18,7 +18,7 @@
 6. [从节点 Redis 配置](#6-从节点-redis-配置)
 7. [Sentinel 哨兵配置](#7-sentinel-哨兵配置)
 8. [systemd 服务配置](#8-systemd-服务配置)
-9. [防火墙与安全组](#9-防火墙与安全组)
+9. [网络边界与端口](#9-网络边界与端口)
 10. [启动顺序与验证](#10-启动顺序与验证)
 11. [故障切换演练](#11-故障切换演练)
 12. [生产验证清单](#12-生产验证清单)
@@ -529,35 +529,17 @@ systemctl enable redis redis-sentinel
 
 ---
 
-## 9. 防火墙与安全组
+## 9. 网络边界与端口
 
-### 9.1 Redis 端口
+本文不维护本机 `firewalld` 规则，主机防火墙基线由《CentOS7.9生产环境初始化手册.md》统一规定。
 
-Redis `16379` 仅允许应用服务器、Redis 节点、监控服务器访问。
+Redis `16379` 仅允许应用服务器、Redis 节点、监控服务器访问；Sentinel `26379` 仅允许应用服务器、Sentinel 节点、运维跳板机访问。
 
-### 9.2 Sentinel 端口
+部署前需要确认：
 
-Sentinel `26379` 仅允许应用服务器、Sentinel 节点、运维跳板机访问。
-
-### 9.3 firewalld 示例
-
-在每个 Redis 节点执行，按实际网段替换：
-
-```bash
-firewall-cmd --permanent --new-zone=redis-ha
-firewall-cmd --permanent --zone=redis-ha --add-source=10.10.10.0/24
-firewall-cmd --permanent --zone=redis-ha --add-source=10.10.20.0/24
-firewall-cmd --permanent --zone=redis-ha --add-port=16379/tcp
-firewall-cmd --permanent --zone=redis-ha --add-port=26379/tcp
-firewall-cmd --reload
-firewall-cmd --zone=redis-ha --list-all
-```
-
-禁止：
-
-```text
-0.0.0.0/0 -> 16379
-0.0.0.0/0 -> 26379
+- 端口仅对可信内网开放，禁止从公网直接访问；
+- 访问来源由外层防火墙、安全组、ACL、VPN、堡垒机或统一网络策略控制；
+- 端口、来源、用途应登记到资产台账或 CMDB。
 ```
 
 ---

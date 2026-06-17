@@ -17,7 +17,7 @@
 5. [Cluster Redis 配置](#5-cluster-redis-配置)
 6. [ACL 安全配置](#6-acl-安全配置)
 7. [systemd 服务配置](#7-systemd-服务配置)
-8. [防火墙与端口规划](#8-防火墙与端口规划)
+8. [网络边界与端口规划](#8-网络边界与端口规划)
 9. [启动节点与创建集群](#9-启动节点与创建集群)
 10. [集群验证](#10-集群验证)
 11. [故障切换演练](#11-故障切换演练)
@@ -333,7 +333,9 @@ systemctl enable redis
 
 ---
 
-## 8. 防火墙与端口规划
+## 8. 网络边界与端口规划
+
+本文不维护本机 `firewalld` 规则，主机防火墙基线由《CentOS7.9生产环境初始化手册.md》统一规定。
 
 Redis Cluster 必须开放两个端口：
 
@@ -344,25 +346,12 @@ Redis Cluster 必须开放两个端口：
 
 > 端口规划必须遵循《服务器端口统一规划规范.md》。Redis Cluster 服务端口使用 `16379`，Cluster Bus 端口使用 `36379`，不得回退到默认端口 `6379`。
 
-firewalld 示例：
+部署前需要确认：
 
-```bash
-firewall-cmd --permanent --new-zone=redis-cluster
-firewall-cmd --permanent --zone=redis-cluster --add-source=10.10.30.0/24
-firewall-cmd --permanent --zone=redis-cluster --add-source=10.10.20.0/24
-firewall-cmd --permanent --zone=redis-cluster --add-port=16379/tcp
-firewall-cmd --permanent --zone=redis-cluster --add-port=36379/tcp
-firewall-cmd --reload
-firewall-cmd --zone=redis-cluster --list-all
-```
-
-安全要求：
-
-```text
-禁止 0.0.0.0/0 -> 6379
-禁止 0.0.0.0/0 -> 16379
-应用服务器不需要访问 16379
-```
+- 端口仅对可信内网开放，禁止从公网直接访问；
+- 访问来源由外层防火墙、安全组、ACL、VPN、堡垒机或统一网络策略控制；
+- Cluster Bus 端口仅允许集群节点之间互通，不应向其他来源开放；
+- 端口、来源、用途应登记到资产台账或 CMDB。
 
 ---
 

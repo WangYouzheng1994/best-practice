@@ -23,7 +23,7 @@
 10. [单体 Redis 核心配置说明](#10-单体-redis-核心配置说明)
 11. [认证安全配置](#11-认证安全配置)
 12. [systemd 服务配置](#12-systemd-服务配置)
-13. [防火墙与网络访问控制](#13-防火墙与网络访问控制)
+13. [网络边界与访问控制](#13-网络边界与访问控制)
 14. [启动与基础验证](#14-启动与基础验证)
 15. [生产验证清单](#15-生产验证清单)
 16. [运维检查命令](#16-运维检查命令)
@@ -111,7 +111,8 @@
 | 账号                     | 用途          | 权限原则                 |
 | ---------------------- | ----------- | -------------------- |
 | Linux 用户 `redis`       | 运行 Redis 进程 | `/sbin/nologin`，不可登录 |
-| Redis ACL 用户 `app`     | 应用访问        | 读写业务命令，不授予管理和危险命令    |
+| Redis ACL 用户 `admin`   | 运维管理        | 最高权限，仅限受控运维使用        |
+| Redis ACL 用户 `app`     | 应用访问        | 最大化业务权限，排除管理和高危命令   |
 | Redis ACL 用户 `monitor` | 监控巡检        | 只读监控命令               |
 
 
@@ -870,11 +871,18 @@ Redis 7.2 支持两类认证方式：
 生产环境建议：
 
 1. 禁用 `default` 用户；
-2. 为应用创建独立用户；
-3. 为监控创建只读用户；
-4. 不在命令行中直接暴露密码；
-5. 不使用 `redis-cli -a 明文密码` 作为生产执行规范；
-6. 密码必须由密码管理系统生成和保存。
+2. 创建 `admin` 管理用户并授予最高权限，仅用于受控运维、ACL 维护和故障处理；
+3. 创建 `app` 应用用户，采用“最大化业务兼容、排除管理和高危命令”的权限模型；
+4. 创建 `monitor` 只读监控用户，仅用于监控采集和巡检；
+5. 不在命令行中直接暴露密码；
+6. 不使用 `redis-cli -a 明文密码` 作为生产执行规范；
+7. 密码必须由密码管理系统生成和保存。
+
+账号使用边界：
+
+- `admin`：只允许运维人员、自动化运维任务或受控堡垒机使用，不配置到业务应用；
+- `app`：业务应用专用账号，尽量兼容 Java/Spring/Lettuce/Redisson 常见能力，但不允许执行管理类和高危命令；
+- `monitor`：监控巡检专用账号，只允许读取运行状态，不允许读写业务数据。
 
 #### 11.1.2 Redis 配置
 
@@ -887,37 +895,58 @@ aclfile /data/module/redis7.2/conf/users.acl
 不要再配置：
 
 ```conf
-requirepass ReplaceWith_Redis_StrongPassword_2026
+requirepass wyz123!@#
 ```
 
 #### 11.1.3 创建 ACL 文件
 
 Redis ACL 文件支持两种密码写法：
 
-| 写法 | 示例 | 说明 | 生产建议 |
+| 写法 | 示例 | 说明 | 适用建议 |
 |---|---|---|---|
-| 明文写法 | `>原始密码` | Redis 启动后会按该密码认证，文件中可直接看到原始密码 | 可用，但对配置文件保护要求更高 |
-| 哈希写法 | `#SHA256哈希值` | ACL 文件中不保存原始密码，只保存密码的 SHA-256 哈希 | 推荐，用于降低配置文件泄露后的密码暴露风险 |
+| 明文写法 | `>原始密码` | Redis 启动后会按该密码认证，文件中可直接看到原始密码 | 本文主流程采用，简单直观，便于首次部署和排障 |
+| 哈希写法 | `#SHA256哈希值` | ACL 文件中不保存原始密码，只保存密码的 SHA-256 哈希 | 可选增强方案，适合对配置文件泄露风险更敏感的环境 |
 
 无论 ACL 文件中使用 `>原始密码` 还是 `#SHA256哈希值`，客户端连接时都使用原始密码，不使用哈希值。
 
-ACL 文件使用明文密码示例：
-
-```acl
-user default off
-user app on >ReplaceWith_App_StrongPassword_2026 ~* +@read +@write +@connection +@transaction +@scripting -@admin -@dangerous -keys -flushdb -flushall
-user monitor on >ReplaceWith_Monitor_StrongPassword_2026 ~* +ping +info +slowlog +client|getname +client|id +client|list +config|get
-```
-
-ACL 文件使用 SHA-256 哈希密码时，先生成哈希值：
+本文主流程使用明文密码写入 ACL 文件：
 
 ```bash
-REDIS_APP_PASSWORD='ReplaceWith_App_StrongPassword_2026'
-REDIS_MONITOR_PASSWORD='ReplaceWith_Monitor_StrongPassword_2026'
+cat > /data/module/redis7.2/conf/users.acl << 'EOF'
+user default off
+user admin on >wyz123!@# ~* &* +@all
+user app on >wyz123!@# ~* &* +@all -@admin -@dangerous -acl -config -shutdown -debug -module -flushdb -flushall -keys -monitor -save -bgsave -bgrewriteaof
+user monitor on >wyz123!@# ~* +ping +info +slowlog +client|getname +client|id +client|list +config|get
+EOF
+```
 
+设置权限：
+
+```bash
+chown root:redis /data/module/redis7.2/conf/users.acl
+chmod 640 /data/module/redis7.2/conf/users.acl
+```
+
+`admin` 用户拥有最高权限，仅用于受控运维操作，不应配置到业务应用。`app` 用户是业务应用通用账号，采用最大化兼容策略：先授予 `+@all`，再移除管理类和高危命令，默认覆盖 Java/Spring/Lettuce/Redisson 常见业务能力，包括普通读写、事务、Lua 脚本、Pub/Sub、Stream、GEO、Bitmap、HyperLogLog 等。`~*` 表示允许访问所有 key，`&*` 表示允许访问所有 Pub/Sub channel。该账号不授予 ACL 管理、配置修改、停服、调试、模块加载、清库、全量遍历、监控连接抓取和手工持久化触发等能力。
+
+注意：`>password` 是 ACL 文件中的密码语法。如果通过 shell 执行 `ACL SETUSER`，必须给 `>password` 加引号，否则会被 shell 解释为输出重定向。
+
+#### 11.1.4 可选：使用 SHA-256 哈希写法保存 ACL 密码
+
+如果希望 ACL 文件中不直接保存原始密码，可以改用 SHA-256 哈希写法。该方式不是本文部署的必须动作，只是可选增强方案。
+
+先生成哈希值：
+
+```bash
+REDIS_ADMIN_PASSWORD='wyz123!@#'
+REDIS_APP_PASSWORD='wyz123!@#'
+REDIS_MONITOR_PASSWORD='wyz123!@#'
+
+REDIS_ADMIN_PASSWORD_HASH=$(printf '%s' "$REDIS_ADMIN_PASSWORD" | sha256sum | cut -d ' ' -f 1)
 REDIS_APP_PASSWORD_HASH=$(printf '%s' "$REDIS_APP_PASSWORD" | sha256sum | cut -d ' ' -f 1)
 REDIS_MONITOR_PASSWORD_HASH=$(printf '%s' "$REDIS_MONITOR_PASSWORD" | sha256sum | cut -d ' ' -f 1)
 
+printf 'admin hash: %s\n' "$REDIS_ADMIN_PASSWORD_HASH"
 printf 'app hash: %s\n' "$REDIS_APP_PASSWORD_HASH"
 printf 'monitor hash: %s\n' "$REDIS_MONITOR_PASSWORD_HASH"
 ```
@@ -927,7 +956,8 @@ printf 'monitor hash: %s\n' "$REDIS_MONITOR_PASSWORD_HASH"
 ```bash
 cat > /data/module/redis7.2/conf/users.acl << EOF
 user default off
-user app on #${REDIS_APP_PASSWORD_HASH} ~* +@read +@write +@connection +@transaction +@scripting -@admin -@dangerous -keys -flushdb -flushall
+user admin on #${REDIS_ADMIN_PASSWORD_HASH} ~* &* +@all
+user app on #${REDIS_APP_PASSWORD_HASH} ~* &* +@all -@admin -@dangerous -acl -config -shutdown -debug -module -flushdb -flushall -keys -monitor -save -bgsave -bgrewriteaof
 user monitor on #${REDIS_MONITOR_PASSWORD_HASH} ~* +ping +info +slowlog +client|getname +client|id +client|list +config|get
 EOF
 ```
@@ -939,20 +969,24 @@ chown root:redis /data/module/redis7.2/conf/users.acl
 chmod 640 /data/module/redis7.2/conf/users.acl
 ```
 
-注意：`>password` 是 ACL 文件中的密码语法。如果通过 shell 执行 `ACL SETUSER`，必须给 `>password` 加引号，否则会被 shell 解释为输出重定向。
-
-#### 11.1.4 ACL 连接示例
+#### 11.1.5 ACL 连接示例
 
 应用连接：
 
 ```text
-redis://app:ReplaceWith_App_StrongPassword_2026@10.10.10.10:16379/0
+redis://app:wyz123!@#@10.10.10.10:16379/0
+```
+
+管理连接：
+
+```text
+redis://admin:wyz123!@#@10.10.10.10:16379/0
 ```
 
 监控工具连接：
 
 ```text
-redis://monitor:ReplaceWith_Monitor_StrongPassword_2026@10.10.10.10:16379/0
+redis://monitor:wyz123!@#@10.10.10.10:16379/0
 ```
 
 `app` 用户包含 `+@write` 权限，不是只读账号；`monitor` 用户才是监控只读账号。如果图形客户端提示 `readonly mode` 或 `Unable to execute write command`，优先检查客户端连接配置中是否勾选了 `Readonly`、`Read only`、`只读模式` 等选项。Redis ACL 权限不足时通常返回 `NOPERM`，而不是客户端只读模式提示。
@@ -960,7 +994,7 @@ redis://monitor:ReplaceWith_Monitor_StrongPassword_2026@10.10.10.10:16379/0
 `redis-cli` 推荐使用环境变量，执行后立即清理：
 
 ```bash
-export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app ping
 unset REDISCLI_AUTH
 ```
@@ -969,7 +1003,7 @@ unset REDISCLI_AUTH
 
 ```bash
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app
-AUTH app ReplaceWith_App_StrongPassword_2026
+AUTH app wyz123!@#
 ```
 
 ### 11.2 方案 B：传统 `requirepass` 认证
@@ -987,14 +1021,14 @@ aclfile /data/module/redis7.2/conf/users.acl
 改为配置：
 
 ```conf
-requirepass ReplaceWith_Redis_StrongPassword_2026
+requirepass wyz123!@#
 ```
 
 完整安全配置段示例：
 
 ```conf
 # ==== security ====
-requirepass ReplaceWith_Redis_StrongPassword_2026
+requirepass wyz123!@#
 ```
 
 如果之前已经创建并启用了 ACL 文件，切换到传统认证时应从 `redis-production.conf` 中移除或注释 `aclfile`，然后重启 Redis。
@@ -1004,13 +1038,13 @@ requirepass ReplaceWith_Redis_StrongPassword_2026
 应用连接：
 
 ```text
-redis://:ReplaceWith_Redis_StrongPassword_2026@10.10.10.10:16379/0
+redis://:wyz123!@#@10.10.10.10:16379/0
 ```
 
 `redis-cli` 推荐使用环境变量，执行后立即清理：
 
 ```bash
-export REDISCLI_AUTH='ReplaceWith_Redis_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 ping
 unset REDISCLI_AUTH
 ```
@@ -1018,7 +1052,7 @@ unset REDISCLI_AUTH
 不推荐：
 
 ```bash
-redis-cli -h 10.10.10.10 -p 16379 -a ReplaceWith_Redis_StrongPassword_2026 ping
+redis-cli -h 10.10.10.10 -p 16379 -a wyz123!@# ping
 ```
 
 ### 11.3 认证方案切换后的生效方式
@@ -1040,12 +1074,12 @@ ss -lntp | grep 16379
 
 ```bash
 # ACL 认证
-export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 127.0.0.1 -p 16379 --user app ping
 unset REDISCLI_AUTH
 
 # 传统 requirepass 认证
-export REDISCLI_AUTH='ReplaceWith_Redis_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 127.0.0.1 -p 16379 ping
 unset REDISCLI_AUTH
 ```
@@ -1095,47 +1129,18 @@ systemctl enable redis
 
 ---
 
-## 13. 防火墙与网络访问控制 （可选）
+## 13. 网络边界与访问控制
 
-生产 Redis 不允许公网访问，只允许应用服务器、运维跳板机、监控服务器访问。端口规划必须遵循《服务器端口统一规划规范.md》，单体 Redis 标准端口为 `16379`，多实例应在 `16300 ~ 16399` 端口段内分配。
+本文不维护本机 `firewalld` 规则，主机防火墙基线由《CentOS7.9生产环境初始化手册.md》统一规定。
 
-### 13.1 firewalld 示例
+Redis 单体标准端口为 `16379`，仅允许应用服务器、运维跳板机、监控服务器访问；禁止公网直接访问。
 
-将 `10.10.20.0/24` 替换为实际应用服务器网段：
+部署前需要确认：
 
-```bash
-firewall-cmd --permanent --new-zone=redis
-firewall-cmd --permanent --zone=redis --add-source=10.10.20.0/24
-firewall-cmd --permanent --zone=redis --add-port=16379/tcp
-firewall-cmd --reload
-firewall-cmd --zone=redis --list-all
-```
-
-如只允许单个应用服务器访问：
-
-```bash
-firewall-cmd --permanent --new-zone=redis
-firewall-cmd --permanent --zone=redis --add-source=10.10.20.15/32
-firewall-cmd --permanent --zone=redis --add-port=16379/tcp
-firewall-cmd --reload
-```
-
-### 13.2 云安全组要求 （可选）
-
-如果部署在云主机，安全组必须满足：
-
-
-| 方向  | 协议  | 端口    | 来源               |
-| --- | --- | ----- | ---------------- |
-| 入站  | TCP | 16379 | 应用服务器内网 IP 或应用网段 |
-| 入站  | TCP | 16379 | 监控服务器内网 IP       |
-
-
-禁止：
-
-```text
-0.0.0.0/0 -> 16379
-```
+- 端口仅对可信内网开放；
+- 访问来源由外层防火墙、安全组、ACL、VPN、堡垒机或统一网络策略控制；
+- 禁止 `0.0.0.0/0` 访问 Redis 端口；
+- 端口、来源、用途应登记到资产台账或 CMDB。
 
 ---
 
@@ -1180,7 +1185,7 @@ NOAUTH Authentication required.
 使用应用用户访问：
 
 ```bash
-export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app ping
 unset REDISCLI_AUTH
 ```
@@ -1196,7 +1201,7 @@ PONG
 应用用户不应具有管理权限：
 
 ```bash
-export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app CONFIG GET '*'
 unset REDISCLI_AUTH
 ```
@@ -1206,7 +1211,7 @@ unset REDISCLI_AUTH
 监控用户应能执行 `INFO`：
 
 ```bash
-export REDISCLI_AUTH='ReplaceWith_Monitor_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server
 unset REDISCLI_AUTH
 ```
@@ -1216,7 +1221,7 @@ unset REDISCLI_AUTH
 写入测试 key：
 
 ```bash
-export REDISCLI_AUTH='ReplaceWith_App_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app SET prod:check ok EX 300
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app GET prod:check
 unset REDISCLI_AUTH
@@ -1225,7 +1230,7 @@ unset REDISCLI_AUTH
 检查持久化状态：
 
 ```bash
-export REDISCLI_AUTH='ReplaceWith_Monitor_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO persistence
 unset REDISCLI_AUTH
 ```
@@ -1335,7 +1340,7 @@ journalctl -u redis -n 100 --no-pager
 ### 16.2 Redis 基础状态
 
 ```bash
-export REDISCLI_AUTH='ReplaceWith_Monitor_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO clients
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO memory
@@ -1470,7 +1475,7 @@ ln -sfn /data/module/redis7.2.14 /data/module/redis7.2
 Redis 运行后也可以查看：
 
 ```bash
-export REDISCLI_AUTH='ReplaceWith_Monitor_StrongPassword_2026'
+export REDISCLI_AUTH='wyz123!@#'
 /data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server | grep redis_version
 unset REDISCLI_AUTH
 ```

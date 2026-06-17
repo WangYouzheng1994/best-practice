@@ -27,7 +27,7 @@
 1. [用户与密码策略加固](#8-用户与密码策略加固)
 2. [SSH 安全加固](#9-ssh-安全加固)
 3. [SELinux 配置](#10-selinux-配置)
-4. [防火墙配置](#11-防火墙配置)
+4. [主机防火墙基线](#11-主机防火墙基线)
 5. [fail2ban 防暴力破解](#12-fail2ban-防暴力破解)
 6. [/tmp 分区加固](#13-tmp-分区加固)
 7. [auditd 审计日志](#14-auditd-审计日志)
@@ -45,7 +45,7 @@
 
 ### 运行环境（P2 · 中优先级）
 
-1. [环境变量设置](#23-环境变量设置)
+1. [JDK 安装与环境变量设置](#23-jdk-安装与环境变量设置)
 2. [常用诊断工具安装](#24-常用诊断工具安装)
 3. [Docker 安装与配置](#25-docker-安装与配置)
 4. [日志配置](#26-日志配置)
@@ -156,7 +156,7 @@ dmidecode -s system-product-name 2>/dev/null || true
 | --- | --- |
 | 新装空白服务器 | 可按本文档顺序执行，但仍需确认云厂商、DNS、NTP、Yum、Docker 网段 |
 | 已有业务服务器 | 禁止直接整段复制执行，必须逐项评估影响并安排维护窗口 |
-| 云主机/ECS/CVM | 不要随意关闭 NetworkManager、修改 SSH 端口、覆盖 DNS/NTP、防火墙策略 |
+| 云主机/ECS/CVM | 不要随意关闭 NetworkManager、修改 SSH 端口、覆盖 DNS/NTP；主机防火墙按本文第 11 节统一基线执行 |
 | VPN/专线/多 VPC/CEN 环境 | 必须先拿到企业网段规划，重点检查 Docker、K8s、内网 DNS 路由冲突 |
 | Docker/K8s 节点 | `ip_forward`、`rp_filter`、firewalld/iptables、Docker 网段必须按容器主机场景配置 |
 | 数据库/Redis 服务器 | Swap、THP、ulimit、I/O 调度器可更激进，但必须在维护窗口执行 |
@@ -620,58 +620,50 @@ sestatus          # 确认配置已持久化
 
 ---
 
-## 11. 防火墙配置
+## 11. 主机防火墙基线
 
-**目的：** 生产环境必须有边界访问控制。可以使用云安全组、硬件防火墙、firewalld/iptables，但不能出现“以为外层拦了，实际主机全暴露”的情况。
+**目的：** 统一主机防火墙策略，避免每台服务器、每个组件文档分别维护 `firewalld` 规则，降低部署和排障复杂度。
 
-> **实战避坑：** Docker 会自动操作 iptables。firewalld、iptables、Docker 同时存在时，如果规则关系没理清，可能出现容器端口意外暴露、NAT 失效、重启 firewalld 后 Docker 网络异常。`mask firewalld` 也会和后续 fail2ban 的 `firewallcmd-ipset` 方案冲突。
+本文默认服务器处于受控内网环境，业务访问控制统一由外层防火墙、安全组、ACL、VPN、堡垒机或统一网络策略承载。标准服务器默认关闭 `firewalld`，各业务组件部署文档不再维护本机防火墙放行规则。
 
-**方案A：云安全组/硬件防火墙强管控场景**
+> **重要说明：** 关闭 `firewalld` 不等于取消安全控制，而是将访问控制统一上收到外层网络边界。服务器端口不得直接暴露到公网；端口来源、用途和开放范围必须由外层网络策略统一管理并记录。
+
+执行前确认当前网络边界和服务状态：
 
 ```bash
-# 仅当确认云安全组/硬件防火墙已做最小端口开放时，才考虑关闭主机防火墙
-firewall-cmd --list-all 2>/dev/null || true
+systemctl is-active firewalld 2>/dev/null || true
+firewall-cmd --state 2>/dev/null || true
 iptables -S 2>/dev/null | head -50
-
-# 不建议默认 mask firewalld，避免后续自动化工具、fail2ban、合规扫描无法启用
-# systemctl stop firewalld
-# systemctl disable firewalld
-
-# 验证云安全组/硬件防火墙仅开放必要端口：SSH、HTTP/HTTPS、业务内网端口
-systemctl status firewalld 2>/dev/null || true
+ss -tulnp
 ```
 
-**方案B：保留 firewalld 并配置白名单**
+关闭并禁止 `firewalld`：
 
 ```bash
-systemctl enable firewalld --now
-
-# 放行业务端口，生产环境应按实际业务最小开放，不要照抄全部端口
-firewall-cmd --permanent --add-port=80/tcp       # HTTP
-firewall-cmd --permanent --add-port=443/tcp      # HTTPS
-firewall-cmd --permanent --add-port=2222/tcp     # SSH（自定义端口）
-# firewall-cmd --permanent --add-port=3306/tcp   # MySQL，仅允许内网/应用网段
-# firewall-cmd --permanent --add-port=6379/tcp   # Redis，仅允许内网/应用网段
-# firewall-cmd --permanent --add-port=8848/tcp   # Nacos，仅允许内网/应用网段
-
-# 设置信任内网段前必须替换为真实内网网段，不要照抄示例
-# firewall-cmd --permanent --add-source=192.168.1.0/24 --zone=trusted
-
-firewall-cmd --reload
-firewall-cmd --list-all
+systemctl stop firewalld 2>/dev/null || true
+systemctl disable firewalld 2>/dev/null || true
+systemctl mask firewalld 2>/dev/null || true
 ```
 
-**Docker 主机额外要求：**
+验证：
 
 ```bash
-# Docker 主机不要手工清空 iptables；限制容器入口流量优先使用 DOCKER-USER 链
-iptables -S DOCKER-USER 2>/dev/null || true
-iptables -S DOCKER 2>/dev/null || true
-
-# 示例：只允许指定内网段访问容器映射端口，实际网段必须按企业规划替换
-# iptables -I DOCKER-USER -s 10.0.0.0/8 -j RETURN
-# iptables -I DOCKER-USER -j DROP
+systemctl is-enabled firewalld 2>/dev/null || true
+systemctl is-active firewalld 2>/dev/null || true
+systemctl status firewalld --no-pager 2>/dev/null || true
 ```
+
+要求：
+
+- 服务器端口不得直接暴露到公网；
+- 端口访问来源必须由外层防火墙、安全组、ACL、VPN、堡垒机或统一网络策略限制；
+- 访问策略变更应记录到资产台账、CMDB 或网络策略记录；
+- 公网入口、边界代理、堡垒机、多租户主机、Docker/Kubernetes 节点或合规要求主机可作为例外单独启用主机防火墙；
+- 例外主机的防火墙规则应由专项文档或自动化配置统一维护，不在单个业务组件部署文档中分散维护。
+
+**Docker/Kubernetes 主机例外说明：**
+
+Docker 和 Kubernetes 会操作 `iptables`/`nftables` 规则。容器主机是否关闭 `firewalld` 必须结合容器网络方案评估，不要手工清空 `iptables`，也不要在不了解 `DOCKER-USER`、CNI、Service、Ingress 规则的情况下重载防火墙。
 
 ---
 
@@ -681,8 +673,9 @@ iptables -S DOCKER 2>/dev/null || true
 
 ```bash
 # 安装 EPEL 源和 fail2ban
+# 本文默认 firewalld 已关闭，fail2ban 使用 iptables 动作，不安装 fail2ban-firewalld
 yum install -y epel-release
-yum install -y fail2ban fail2ban-firewalld
+yum install -y fail2ban
 
 # 配置 fail2ban
 cat > /etc/fail2ban/jail.local << 'EOF'
@@ -693,8 +686,8 @@ bantime = 3600
 findtime = 600
 # 最大失败次数
 maxretry = 5
-# 使用 firewalld 或 iptables。若 firewalld 已关闭，改用 iptables-multiport
-banaction = firewallcmd-ipset
+# 使用 iptables 动作。本文默认 firewalld 已按第 11 节关闭
+banaction = iptables-multiport
 
 [sshd]
 enabled = true
@@ -1178,57 +1171,80 @@ cat /proc/sys/kernel/sysrq   # 应显示 1
 
 ---
 
-## 23. 环境变量设置
+## 23. JDK 安装与环境变量设置
 
-**目的：** 统一管理环境变量，增强命令行使用体验。
+**目的：** 安装生产 Java 运行环境，并统一配置全局环境变量。本文以离线安装 `OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz` 为例，安装目录遵循 `/data/module` 规范。
+
+> **版本选择建议：** 新项目优先使用 JDK 21 LTS；存量 Spring Boot 2.x、老中间件或历史应用如果只验证过 JDK 8/11/17，不要直接升级到 JDK 21，应先在测试环境完成兼容性验证。
 
 ```bash
-cat > /etc/profile.d/custom.sh << 'EOF'
-#!/bin/bash
-# ================================================================
-# 生产环境自定义环境变量 - Author: 王有政
-# ================================================================
+# 进入软件包所在目录
+cd /data/module
 
-# ---- PATH 扩展 ----
-export PATH=$PATH:/usr/local/bin:/usr/local/sbin:/data/apps/bin
+# 确认安装包存在
+ls -lh OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz
 
-# ---- 语言与编码 ----
-export LANG=en_US.UTF-8
-export LC_ALL=en_US.UTF-8
+# 解压 JDK
+# 解压后通常生成 jdk-21.0.11+10 目录
+tar -zxvf OpenJDK21U-jdk_x64_linux_hotspot_21.0.11_10.tar.gz
 
-# ---- 编辑器 ----
-export EDITOR=vim
+# 确认实际解压目录
+ls -ld jdk-21.0.11+10
 
-# ---- Docker ----
-export DOCKER_DATA_ROOT="/data/docker"
+# 建立稳定软链接，后续升级只需要切换软链接
+ln -sfn /data/module/jdk-21.0.11+10 /data/module/jdk21
 
-# ---- 历史命令增强 ----
-export HISTTIMEFORMAT="%F %T "
-export HISTSIZE=50000
-export HISTFILESIZE=500000
-# 多终端追加历史而非覆盖
-export PROMPT_COMMAND="history -a"
-# 历史命令忽略重复和特定命令
-export HISTCONTROL=ignoreboth:erasedups
-export HISTIGNORE="ls:cd:exit:clear:history"
-
-# ---- Java 应用（如需要）----
-# export JAVA_HOME=/usr/local/jdk17
-# export PATH=$JAVA_HOME/bin:$PATH
-# export CLASSPATH=.:$JAVA_HOME/lib
-
-# ---- 别名 ----
-alias ll='ls -alh'
-alias grep='grep --color=auto'
-alias df='df -hT'
-alias du='du -h --max-depth=1'
-alias ports='netstat -tulnp'
-alias meminfo='free -h && echo "---" && cat /proc/meminfo | head -20'
-EOF
-
-# 立即生效
-source /etc/profile.d/custom.sh
+# root 拥有安装目录，普通业务用户只读执行
+chown -R root:root /data/module/jdk-21.0.11+10
+chmod -R go-w /data/module/jdk-21.0.11+10
 ```
+
+配置全局环境变量：
+
+> **统一约定：** 团队自定义环境变量统一维护在 `/etc/profile.d/myenv.sh`，不要为 JDK 单独创建 `/etc/profile.d/jdk.sh`。如果该文件已包含 MySQL、Maven、Redis 等环境变量，禁止使用 `cat >` 覆盖，应编辑文件追加 JDK 配置。
+
+编辑统一环境变量文件：
+
+```bash
+vim /etc/profile.d/myenv.sh
+```
+
+追加以下内容：
+
+```bash
+# JAVA_HOME：JDK 当前版本软链接目录，统一指向 /data/module/jdk21，升级时只切换软链接
+export JAVA_HOME=/data/module/jdk21
+export JRE_HOME=$JAVA_HOME
+export CLASSPATH=.:$JAVA_HOME/lib
+
+# PATH：将 Java 命令加入命令搜索路径，便于直接执行 java、javac、jcmd、jmap 等命令
+export PATH=$JAVA_HOME/bin:$PATH
+```
+
+保存后加载生效：
+
+```bash
+chmod 644 /etc/profile.d/myenv.sh
+source /etc/profile.d/myenv.sh
+
+# 验证环境变量和 Java 版本
+echo $JAVA_HOME
+which java
+java -version
+javac -version
+```
+
+**验收标准：**
+
+| 项目 | 期望结果 |
+| --- | --- |
+| `echo $JAVA_HOME` | `/data/module/jdk21` |
+| `which java` | `/data/module/jdk21/bin/java` |
+| `java -version` | 显示 `openjdk version "21.0.11"` |
+| `javac -version` | 显示 `javac 21.0.11` |
+
+> **升级建议：** 后续升级 JDK 时，不要覆盖原目录。先解压新版本目录，再用 `ln -sfn /data/module/<新JDK目录> /data/module/jdk21` 切换软链接，验证通过后再安排旧版本清理。
+
 
 ---
 

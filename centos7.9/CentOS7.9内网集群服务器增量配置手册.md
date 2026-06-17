@@ -28,7 +28,7 @@
 ### 网络与安全（P0）
 
 1. [网络分区与路由规范](#10-网络分区与路由规范)
-2. [防火墙白名单与端口矩阵](#11-防火墙白名单与端口矩阵)
+2. [网络边界与端口规划](#8-网络边界与端口规划)
 3. [节点间安全互信策略](#12-节点间安全互信策略)
 4. [证书与内部 CA 管理](#13-证书与内部-ca-管理)
 5. [内网访问边界与跳板机](#14-内网访问边界与跳板机)
@@ -393,13 +393,7 @@ sed -i 's/^bindaddress .*/bindaddress 10.10.10.12/' /etc/chrony.conf
 systemctl restart chronyd
 ```
 
-开放 NTP 服务端口：
-
-```bash
-firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.0.0/16" port protocol="udp" port="123" accept'
-firewall-cmd --reload
-firewall-cmd --list-all
-```
+开放 NTP 服务端口。本文不维护本机 `firewalld` 规则，主机防火墙基线由《CentOS7.9生产环境初始化手册.md》统一规定。如已统一关闭 `firewalld`，跳过此步；如作为例外主机保留 `firewalld`，参考执行：
 
 验证时间服务器：
 
@@ -692,13 +686,7 @@ sshd -t
 systemctl reload sshd
 ```
 
-防火墙限制 SSH 来源：
-
-```bash
-firewall-cmd --permanent --remove-service=ssh 2>/dev/null || true
-firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.10.10/32" port protocol="tcp" port="2222" accept'
-firewall-cmd --reload
-```
+防火墙限制 SSH 来源。本文不维护本机 `firewalld` 规则，主机防火墙基线由《CentOS7.9生产环境初始化手册.md》统一规定。如已统一关闭 `firewalld`，跳过此步；如作为例外主机保留 `firewalld`，参考执行。
 
 ---
 
@@ -770,7 +758,11 @@ sysctl --system
 | 备份                | 873/22         | TCP     | 备份节点          | 被备份节点      | rsync 或 SSH 备份      |
 
 
-### 11.2 firewalld ipset 管理
+### 11.2 可选：访问来源管理
+
+本文不维护本机 `firewalld` 规则，主机防火墙基线由《CentOS7.9生产环境初始化手册.md》统一规定。如已统一关闭 `firewalld`，以下内容可作为参考，实际不需执行。
+
+#### 参考示例（firewalld ipset 管理）
 
 ```bash
 # 创建基础来源集合
