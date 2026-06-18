@@ -16,19 +16,20 @@
 3. [部署前检查](#3-部署前检查)
 4. [源码包准备与校验](#4-源码包准备与校验)
 5. [编译安装 Redis](#5-编译安装-redis)
-6. [OS 内核与资源限制配置](#6-os-内核与资源限制配置)
-7. [目录、用户与权限](#7-目录用户与权限)
-8. [生成生产密码](#8-生成生产密码)
-9. [Redis 标准化配置文件写入](#9-redis-标准化配置文件写入)
-10. [单体 Redis 核心配置说明](#10-单体-redis-核心配置说明)
-11. [认证安全配置](#11-认证安全配置)
-12. [systemd 服务配置](#12-systemd-服务配置)
-13. [网络边界与访问控制](#13-网络边界与访问控制)
-14. [启动与基础验证](#14-启动与基础验证)
-15. [生产验证清单](#15-生产验证清单)
-16. [运维检查命令](#16-运维检查命令)
-17. [停止、重启与回滚](#17-停止重启与回滚)
-18. [常见问题](#18-常见问题)
+6. [配置 Redis 环境变量](#6-配置-redis-环境变量)
+7. [OS 内核与资源限制配置](#7-os-内核与资源限制配置)
+8. [目录、用户与权限](#8-目录用户与权限)
+9. [生成生产密码](#9-生成生产密码)
+10. [Redis 标准化配置文件写入](#10-redis-标准化配置文件写入)
+11. [单体 Redis 核心配置说明](#11-单体-redis-核心配置说明)
+12. [认证安全配置](#12-认证安全配置)
+13. [systemd 服务配置](#13-systemd-服务配置)
+14. [网络边界与访问控制](#14-网络边界与访问控制)
+15. [启动与基础验证](#15-启动与基础验证)
+16. [生产验证清单](#16-生产验证清单)
+17. [运维检查命令](#17-运维检查命令)
+18. [停止、重启与回滚](#18-停止重启与回滚)
+19. [常见问题](#19-常见问题)
 
 ---
 
@@ -257,9 +258,49 @@ redis-cli 7.2.14
 
 ---
 
-## 6. OS 内核与资源限制配置
+## 6. 配置 Redis 环境变量
 
-### 6.1 关闭 Transparent Huge Pages
+团队统一将自定义环境变量维护在 `/etc/profile.d/myenv.sh`，不要为 Redis 单独创建 `/etc/profile.d/redis.sh`。
+
+编辑统一环境变量文件：
+
+```bash
+vim /etc/profile.d/myenv.sh
+```
+
+追加以下内容：
+
+```bash
+# REDIS_HOME：Redis 当前版本软链接目录，统一指向 /data/module/redis7.2，升级时只切换软链接
+export REDIS_HOME=/data/module/redis7.2
+
+# PATH：将 Redis 命令加入命令搜索路径，便于直接执行 redis-cli、redis-server、redis-benchmark 等命令
+export PATH=$REDIS_HOME/bin:$PATH
+```
+
+保存后加载生效：
+
+```bash
+chmod 644 /etc/profile.d/myenv.sh
+source /etc/profile.d/myenv.sh
+```
+
+验证版本与命令路径：
+
+```bash
+redis-server --version
+redis-cli --version
+which redis-server
+which redis-cli
+```
+
+期望 `which redis-server` 和 `which redis-cli` 指向 `/data/module/redis7.2/bin/`。
+
+---
+
+## 7. OS 内核与资源限制配置
+
+### 7.1 关闭 Transparent Huge Pages
 
 THP 会导致 Redis 在 `BGSAVE`、AOF rewrite、fork 子进程时出现延迟尖刺，生产环境必须关闭。
 
@@ -308,7 +349,7 @@ cat /sys/kernel/mm/transparent_hugepage/defrag
 
 期望 `never` 被 `[]` 包裹。
 
-### 6.2 配置 sysctl 参数
+### 7.2 配置 sysctl 参数
 
 不要直接反复向 `/etc/sysctl.conf` 追加配置。生产建议使用独立配置文件，便于维护和回滚。
 
@@ -349,7 +390,7 @@ sysctl net.core.somaxconn
 sysctl net.ipv4.tcp_max_syn_backlog
 ```
 
-### 6.3 Swap 策略
+### 7.3 Swap 策略
 
 Redis 对延迟敏感，生产环境应尽量避免使用 Swap。
 
@@ -380,7 +421,7 @@ sysctl vm.swappiness
 
 **推荐：** 如果服务器内存充足并且 `maxmemory` 设置合理，选择方案 A；否则选择方案 B。
 
-### 6.4 文件句柄数限制
+### 7.4 文件句柄数限制
 
 Redis 每个客户端连接至少占用一个文件描述符。生产环境必须提高文件句柄限制。
 
@@ -391,19 +432,19 @@ redis hard nofile 100032
 EOF
 ```
 
-systemd 服务中也需要设置 `LimitNOFILE=100032`，见 [12. systemd 服务配置](#12-systemd-服务配置)。
+systemd 服务中也需要设置 `LimitNOFILE=100032`，见 [13. systemd 服务配置](#13-systemd-服务配置)。
 
 ---
 
-## 7. 目录、用户与权限
+## 8. 目录、用户与权限
 
-### 7.1 创建 redis 用户
+### 8.1 创建 redis 用户
 
 ```bash
 id redis || useradd -r -s /sbin/nologin redis
 ```
 
-### 7.2 创建运行目录
+### 8.2 创建运行目录
 
 ```bash
 mkdir -p /data/module/redis7.2/conf
@@ -427,7 +468,7 @@ mkdir -p /data/module/redis7.2/backup
 | `/data/module/redis7.2/backup` | 备份文件暂存目录              |
 
 
-### 7.3 设置权限
+### 8.3 设置权限
 
 ```bash
 chown -R redis:redis /data/module/redis7.2/data /data/module/redis7.2/logs /data/module/redis7.2/run /data/module/redis7.2/backup
@@ -442,11 +483,11 @@ chmod 750 /data/module/redis7.2/data /data/module/redis7.2/logs /data/module/red
 
 ---
 
-## 8. 生成生产密码
+## 9. 生成生产密码
 
 Redis 安装配置前先生成强密码，并用生成结果替换后文所有示例密码。
 
-### 8.1 方案 A：生成包含特殊字符的复杂密码
+### 9.1 方案 A：生成包含特殊字符的复杂密码
 
 如果企业密码规范要求必须包含大小写字母、数字和特殊字符，推荐使用以下方式生成：
 
@@ -456,7 +497,7 @@ LC_ALL=C tr -dc 'A-Za-z0-9_@%+=:,.~!#$^*-' < /dev/urandom | head -c 48; echo
 
 该命令会生成随机复杂密码，字符集刻意避开了空格、单引号、双引号、反斜杠、反引号、分号、管道符等容易影响配置文件或命令行解析的字符。
 
-### 8.2 方案 B：生成十六进制随机密码
+### 9.2 方案 B：生成十六进制随机密码
 
 ```bash
 openssl rand -hex 32
@@ -464,7 +505,7 @@ openssl rand -hex 32
 
 该方式生成 64 位十六进制字符，随机强度高，且不包含容易被 Shell 误解析的特殊字符。但它只包含 `0-9a-f`，不满足部分企业对“必须包含大小写字母、数字、特殊字符”的密码复杂度要求。
 
-### 8.3 方案 C：没有 OpenSSL 时生成普通随机密码
+### 9.3 方案 C：没有 OpenSSL 时生成普通随机密码
 
 ```bash
 tr -dc 'A-Za-z0-9_@%+=:,.~-' < /dev/urandom | head -c 48; echo
@@ -476,7 +517,7 @@ tr -dc 'A-Za-z0-9_@%+=:,.~-' < /dev/urandom | head -c 48; echo
 
 ---
 
-## 9. Redis 标准化配置文件写入
+## 10. Redis 标准化配置文件写入
 
 Redis 支持在主配置文件中使用 `include` 引入额外配置文件。为兼顾“保留官方默认配置参考”和“首次部署快速标准化”，本文采用以下方式：
 
@@ -486,7 +527,7 @@ Redis 支持在主配置文件中使用 `include` 引入额外配置文件。为
 
 `include` 必须追加在 `redis.conf` 末尾，使 `redis-production.conf` 中的同名配置覆盖官方默认配置。首次部署时主要维护 `redis-production.conf`，不需要逐项搜索修改官方默认配置文件。
 
-### 9.1 准备主配置文件并追加 include
+### 10.1 准备主配置文件并追加 include
 
 ```bash
 cp /data/module/redis7.2.14/src/redis-7.2.14/redis.conf /data/module/redis7.2/conf/redis.conf
@@ -501,7 +542,7 @@ chown root:redis /data/module/redis7.2/conf/redis.conf
 chmod 640 /data/module/redis7.2/conf/redis.conf
 ```
 
-### 9.2 写入生产标准化配置文件
+### 10.2 写入生产标准化配置文件
 
 写入前先设置现场变量。必须将 `REDIS_BIND_IP` 替换为本机实际内网 IP（在服务器执行ifconfig查看)，`REDIS_MAXMEMORY` 按服务器内存和业务容量评估后调整。
 
@@ -529,7 +570,8 @@ bind 127.0.0.1 ${REDIS_BIND_IP}
 protected-mode yes
 port ${REDIS_PORT}
 tcp-backlog 511
-timeout 300
+timeout 0
+# Java 服务连接池场景不建议由 Redis 主动关闭正常空闲连接，异常死连接由 TCP keepalive 探测
 tcp-keepalive 300
 
 # ==== memory ====
@@ -585,7 +627,7 @@ chown root:redis /data/module/redis7.2/conf/redis-production.conf
 chmod 640 /data/module/redis7.2/conf/redis-production.conf
 ```
 
-### 9.3 创建 ACL 文件
+### 10.3 创建 ACL 文件
 
 ```bash
 touch /data/module/redis7.2/conf/users.acl
@@ -605,11 +647,11 @@ grep -E '^(include|bind|port|maxmemory|dir|logfile|pidfile|aclfile) ' \
 
 ---
 
-## 10. 单体 Redis 核心配置说明
+## 11. 单体 Redis 核心配置说明
 
 本章只解释第 9 章标准配置文件中的核心参数含义和调整依据。首次部署时优先直接使用第 9 章完整配置写入，不需要逐项手工修改官方默认配置文件。
 
-### 10.1 基础运行配置
+### 11.1 基础运行配置
 
 ```conf
 daemonize no
@@ -634,11 +676,14 @@ bind 127.0.0.1 10.10.10.10
 protected-mode yes
 port 16379
 tcp-backlog 511
-timeout 300
+timeout 0
+# Java 服务连接池场景不建议由 Redis 主动关闭正常空闲连接，异常死连接由 TCP keepalive 探测
 tcp-keepalive 300
 ```
 
 生产环境禁止默认绑定 `0.0.0.0`。应只绑定本机回环地址和 Redis 服务内网 IP。
+
+`timeout 0` 表示 Redis 不因客户端连接空闲而主动断开连接。本文默认面向 Java 服务连接池场景，Lettuce、Jedis、Redisson、Spring Data Redis 等客户端通常会维护长连接或连接池。如果 Redis 设置较短的空闲超时，例如 `timeout 300`，可能导致服务端主动关闭连接池中的空闲连接，引发低峰后重连、偶发命令失败或连接抖动。生产默认建议由 Java 客户端连接池管理连接生命周期，Redis 侧通过 `tcp-keepalive 300` 探测异常 TCP 死连接，并通过 `maxclients`、连接池上限和监控告警控制连接资源风险。
 
 如 Redis 仅供本机应用访问，使用：
 
@@ -685,7 +730,7 @@ maxmemory-samples 10
 - jemalloc 内存碎片；
 - 监控 Agent 和系统服务。
 
-### 10.4 淘汰策略选择
+### 11.4 淘汰策略选择
 
 
 | 策略             | 适用场景                | 风险                     |
@@ -995,14 +1040,14 @@ redis://monitor:wyz123!@#@10.10.10.10:16379/0
 
 ```bash
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app ping
+redis-cli -h 10.10.10.10 -p 16379 --user app ping
 unset REDISCLI_AUTH
 ```
 
 也可以使用交互方式：
 
 ```bash
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app
+redis-cli -h 10.10.10.10 -p 16379 --user app
 AUTH app wyz123!@#
 ```
 
@@ -1045,7 +1090,7 @@ redis://:wyz123!@#@10.10.10.10:16379/0
 
 ```bash
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 ping
+redis-cli -h 10.10.10.10 -p 16379 ping
 unset REDISCLI_AUTH
 ```
 
@@ -1075,12 +1120,12 @@ ss -lntp | grep 16379
 ```bash
 # ACL 认证
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 127.0.0.1 -p 16379 --user app ping
+redis-cli -h 127.0.0.1 -p 16379 --user app ping
 unset REDISCLI_AUTH
 
 # 传统 requirepass 认证
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 127.0.0.1 -p 16379 ping
+redis-cli -h 127.0.0.1 -p 16379 ping
 unset REDISCLI_AUTH
 ```
 
@@ -1173,7 +1218,7 @@ ss -lntp | grep 16379
 未认证访问应失败：
 
 ```bash
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 ping
+redis-cli -h 10.10.10.10 -p 16379 ping
 ```
 
 期望返回：
@@ -1186,7 +1231,7 @@ NOAUTH Authentication required.
 
 ```bash
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app ping
+redis-cli -h 10.10.10.10 -p 16379 --user app ping
 unset REDISCLI_AUTH
 ```
 
@@ -1202,7 +1247,7 @@ PONG
 
 ```bash
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app CONFIG GET '*'
+redis-cli -h 10.10.10.10 -p 16379 --user app CONFIG GET '*'
 unset REDISCLI_AUTH
 ```
 
@@ -1212,7 +1257,7 @@ unset REDISCLI_AUTH
 
 ```bash
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server
 unset REDISCLI_AUTH
 ```
 
@@ -1222,8 +1267,8 @@ unset REDISCLI_AUTH
 
 ```bash
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app SET prod:check ok EX 300
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user app GET prod:check
+redis-cli -h 10.10.10.10 -p 16379 --user app SET prod:check ok EX 300
+redis-cli -h 10.10.10.10 -p 16379 --user app GET prod:check
 unset REDISCLI_AUTH
 ```
 
@@ -1231,7 +1276,7 @@ unset REDISCLI_AUTH
 
 ```bash
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO persistence
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO persistence
 unset REDISCLI_AUTH
 ```
 
@@ -1263,8 +1308,8 @@ cat /proc/$(pidof redis-server)/limits | grep 'Max open files'
 
 | 检查项          | 命令                                                 | 期望                            |
 | ------------ | -------------------------------------------------- | ----------------------------- |
-| Redis 版本     | `/data/module/redis7.2/bin/redis-server --version` | `7.2.14`                      |
-| redis-cli 版本 | `/data/module/redis7.2/bin/redis-cli --version`    | `7.2.14`                      |
+| Redis 版本     | `redis-server --version` | `7.2.14`                      |
+| redis-cli 版本 | `redis-cli --version`    | `7.2.14`                      |
 | 稳定软链接        | `ls -l /data/module/redis7.2`                      | 指向 `/data/module/redis7.2.14` |
 | 运行用户         | `id redis`                                         | 用户存在且不可登录                     |
 
@@ -1326,32 +1371,32 @@ cat /proc/$(pidof redis-server)/limits | grep 'Max open files'
 
 ---
 
-## 16. 运维检查命令
+## 17. 运维检查命令
 
 以下命令建议纳入日常巡检或监控。
 
-### 16.1 服务状态
+### 17.1 服务状态
 
 ```bash
 systemctl status redis --no-pager
 journalctl -u redis -n 100 --no-pager
 ```
 
-### 16.2 Redis 基础状态
+### 17.2 Redis 基础状态
 
 ```bash
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO clients
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO memory
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO stats
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO persistence
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor SLOWLOG LEN
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor SLOWLOG GET 10
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO clients
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO memory
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO stats
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO persistence
+redis-cli -h 10.10.10.10 -p 16379 --user monitor SLOWLOG LEN
+redis-cli -h 10.10.10.10 -p 16379 --user monitor SLOWLOG GET 10
 unset REDISCLI_AUTH
 ```
 
-### 16.3 重点监控指标
+### 17.3 重点监控指标
 
 
 | 指标                                  | 风险说明        |
@@ -1372,9 +1417,9 @@ unset REDISCLI_AUTH
 
 ---
 
-## 17. 停止、重启与回滚
+## 18. 停止、重启与回滚
 
-### 17.1 停止 Redis
+### 18.1 停止 Redis
 
 优先使用 systemd：
 
@@ -1385,7 +1430,7 @@ systemctl status redis --no-pager
 
 不建议在生产规范中直接使用明文密码执行 `shutdown`。
 
-### 17.2 重启 Redis
+### 18.2 重启 Redis
 
 单体 Redis 存在单点风险，生产重启前必须确认业务可接受影响窗口。
 
@@ -1394,7 +1439,7 @@ systemctl restart redis
 systemctl status redis --no-pager
 ```
 
-### 17.3 配置变更前
+### 18.3 配置变更前
 
 备份配置文件：
 
@@ -1405,7 +1450,7 @@ cp /data/module/redis7.2/conf/users.acl /data/module/redis7.2/conf/users.acl.bak
 
 配置变更仍需在测试环境验证。Redis 没有等价于 Nginx `nginx -t` 的完整配置检查命令，不要把 `--test-memory` 误当成配置语法检查。
 
-### 17.4 回滚配置
+### 18.4 回滚配置
 
 如果变更后 Redis 无法启动：
 
@@ -1427,7 +1472,7 @@ systemctl status redis --no-pager
 4. `default` 用户禁用后，旧客户端是否仍只传密码不传用户名；
 5. ACL 权限是否误删了业务需要的命令。
 
-### 17.5 版本回滚
+### 18.5 版本回滚
 
 如果升级后需要回滚 Redis 二进制版本，应先确认旧版本安装目录仍存在。例如：
 
@@ -1449,7 +1494,7 @@ systemctl status redis --no-pager
 
 ---
 
-## 18. 常见问题
+## 19. 常见问题
 
 ### Q1：编译报错 jemalloc 相关怎么办？
 
@@ -1468,15 +1513,15 @@ ln -sfn /data/module/redis7.2.14 /data/module/redis7.2
 ### Q2：如何确认当前 Redis 版本？
 
 ```bash
-/data/module/redis7.2/bin/redis-server --version
-/data/module/redis7.2/bin/redis-cli --version
+redis-server --version
+redis-cli --version
 ```
 
 Redis 运行后也可以查看：
 
 ```bash
 export REDISCLI_AUTH='wyz123!@#'
-/data/module/redis7.2/bin/redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server | grep redis_version
+redis-cli -h 10.10.10.10 -p 16379 --user monitor INFO server | grep redis_version
 unset REDISCLI_AUTH
 ```
 

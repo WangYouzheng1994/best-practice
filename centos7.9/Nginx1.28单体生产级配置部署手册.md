@@ -17,20 +17,21 @@
 4. [安装方案选择](#4-安装方案选择)
 5. [源码包准备与校验](#5-源码包准备与校验)
 6. [编译安装 Nginx](#6-编译安装-nginx)
-7. [OS 内核与资源限制配置](#7-os-内核与资源限制配置)
-8. [目录、用户与权限](#8-目录用户与权限)
-9. [Nginx 标准化配置文件写入](#9-nginx-标准化配置文件写入)
-10. [Vue 前端站点配置](#10-vue-前端站点配置)
-11. [HTTPS 证书配置](#11-https-证书配置)
-12. [systemd 服务配置](#12-systemd-服务配置)
-13. [网络边界与访问控制](#13-网络边界与访问控制)
-14. [启动与基础验证](#14-启动与基础验证)
-15. [生产验证清单](#15-生产验证清单)
-16. [运维检查命令](#16-运维检查命令)
-17. [前端发布、回滚与缓存刷新](#17-前端发布回滚与缓存刷新)
-18. [停止、重启与回滚](#18-停止重启与回滚)
-19. [日志切割](#19-日志切割)
-20. [常见问题](#20-常见问题)
+7. [配置环境变量](#7-配置环境变量)
+8. [OS 内核与资源限制配置](#8-os-内核与资源限制配置)
+9. [目录、用户与权限](#9-目录用户与权限)
+10. [Nginx 标准化配置文件写入](#10-nginx-标准化配置文件写入)
+11. [Vue 前端站点配置](#11-vue-前端站点配置)
+12. [HTTPS 证书配置](#12-https-证书配置)
+13. [systemd 服务配置](#13-systemd-服务配置)
+14. [网络边界与访问控制](#14-网络边界与访问控制)
+15. [启动与基础验证](#15-启动与基础验证)
+16. [生产验证清单](#16-生产验证清单)
+17. [运维检查命令](#17-运维检查命令)
+18. [前端发布、回滚与缓存刷新](#18-前端发布回滚与缓存刷新)
+19. [停止、重启与回滚](#19-停止重启与回滚)
+20. [日志切割](#20-日志切割)
+21. [常见问题](#21-常见问题)
 
 ---
 
@@ -67,7 +68,9 @@
 10. 不得在生产环境使用 `npm run dev`、`vite preview`、临时 Node 静态服务器托管前端；
 11. 不得将证书私钥、业务配置密钥、`.env` 等敏感文件放入 Web 可访问目录；
 12. 端口不得直接暴露到公网，必须由外层防火墙、安全组、ACL、VPN、堡垒机或统一网络策略保护；
-13. 单体 Nginx 存在单点风险，核心生产系统应结合负载均衡、VIP、CDN、WAF 或多节点架构。
+13. 单体 Nginx 存在单点风险，核心生产系统应结合负载均衡、VIP、CDN、WAF 或多节点架构；
+14. Nginx 监听端口默认收敛在非特权端口（HTTP `8088`、HTTPS `8443`），通过外层防火墙做 NAT 映射对外提供服务，不直接监听 `80/443`，目的不是"换端口就安全"，而是减少无差别扫描噪声、避免与系统其他 Web 中间件冲突、为后续 worker 直接绑定预留空间；
+15. 公网暴露的 Nginx 必须启用基础限流（`limit_req`、`limit_conn`）、敏感路径屏蔽、`default_server` 兜底和登录接口加严限流，避免在生产入口"裸奔"。
 
 ---
 
@@ -109,23 +112,37 @@
 ### 2.2 端口与网络规划
 
 
-| 项目        | 默认值                     | 说明                          |
-| --------- | ----------------------- | --------------------------- |
-| HTTP 端口   | `80`                    | 公网系统通常用于跳转 HTTPS；内网系统可按规范使用 |
-| HTTPS 端口  | `443`                   | 生产公网系统推荐默认入口                |
-| 后端 API 地址 | `http://127.0.0.1:8080` | 示例值，按实际后端服务替换               |
-| 监听地址      | `0.0.0.0` 或指定内网 IP      | 公网入口按需监听，内网系统建议绑定内网 IP      |
-| 防火墙来源     | 用户网段、负载均衡、WAF、CDN 回源地址  | 不建议无条件对所有来源开放管理类入口          |
+| 项目        | 默认值                      | 说明                                  |
+| --------- | ------------------------ | ----------------------------------- |
+| HTTP 端口   | `8088`                   | 内网监听，仅用于 301 跳转 HTTPS，不直接对外提供业务     |
+| HTTPS 端口  | `8443`                   | 内网监听的业务入口；公网通过外层防火墙 NAT 映射到此端口      |
+| 后端 API 地址 | `http://127.0.0.1:8080`  | 示例值，按实际后端服务替换；后端不得与 Nginx 端口冲突      |
+| 监听地址      | `0.0.0.0` 或指定内网 IP       | 公网入口按需监听，内网系统建议绑定内网 IP              |
+| 公网映射策略    | 外层防火墙 NAT 公网端口 → 内网 8443 | Nginx 自身不直接监听 80/443，公网端口由网络/运维统一规划 |
+| 防火墙来源     | 用户网段、负载均衡、WAF、CDN 回源地址   | 不建议无条件对所有来源开放管理类入口                  |
 
+
+端口选择说明：
+
+- 不使用 `80/443` 的根本原因不是"换端口就安全"——端口号本身不构成任何安全屏障，扫描器对全端口扫描早已是常态。真正的收益是：① 大幅减少 80/443 的无差别蠕虫扫描噪声，让 access.log 更清晰；② 避免与系统中其他可能占用 80/443 的 Web 中间件（如 httpd、Docker、Podman）冲突；③ 监听 ≥1024 的端口为后续 worker/master 直接绑定非特权端口预留空间。
+- 不使用 `8080` 作为 HTTP 跳转端口，是因为本文示例后端 API 默认监听 `127.0.0.1:8080`，避免占用冲突，因此选择 `8088`。
+- 公网端口由外层防火墙规则决定（可能是 80、443、或任意端口），Nginx 手册不固定。
+
+访问入口（`server_name`）规划：
+
+- 业务 `server_name` 必须**同时包含域名和服务器 IP**，例如 `server_name example.com 203.0.113.10 192.168.1.100;`，目的是同时允许"域名访问"和"裸 IP 访问"两种入口。
+- `server_name` 中 IP 的写法是字面量，**不需要带端口号**；Nginx 是根据 HTTP `Host` 头里的主机名部分匹配的。
+- `default_server` 兜底块仍然保留，未匹配到上述任一域名或 IP 的请求（如扫描器随便填的 Host）会被 444 直接掐断。
+- HTTPS 证书是绑定域名签发的，**用 IP 直接访问 HTTPS 入口浏览器会报证书告警**（CN/SAN 不匹配），这是浏览器行为，不是 Nginx 配置问题；POC 阶段建议 IP 访问优先走 HTTP `8088`，或在 curl 测试时使用 `-k` 跳过校验。生产对外发布只通过域名，不要通过 IP 访问 HTTPS。
 
 ### 2.3 账号规划
 
 
-| 账号               | 用途                        | 权限原则                                |
-| ---------------- | ------------------------- | ----------------------------------- |
-| Linux 用户 `nginx` | 运行 Nginx worker 进程        | `/sbin/nologin`，不可登录                |
-| Linux 用户 `root`  | 启动 master 进程、绑定 80/443 端口 | 仅用于 systemd 管理，不运行 worker           |
-| 发布用户             | 上传 Vue 构建产物               | 由企业发布平台或运维规范决定，不建议直接复用 `nginx` 用户登录 |
+| 账号               | 用途                            | 权限原则                                                                                            |
+| ---------------- | ----------------------------- | ----------------------------------------------------------------------------------------------- |
+| Linux 用户 `nginx` | 运行 Nginx worker 进程            | `/sbin/nologin`，不可登录                                                                            |
+| Linux 用户 `root`  | 启动 master 进程，由 systemd 管理生命周期 | 仅用于 systemd 管理，不运行 worker；监听 8088/8443 非特权端口理论上可改为 nginx 用户启动 master，本文保留 root master 以兼容现有运维习惯 |
+| 发布用户             | 上传 Vue 构建产物                   | 由企业发布平台或运维规范决定，不建议直接复用 `nginx` 用户登录                                                             |
 
 
 ---
@@ -172,10 +189,10 @@ timedatectl
 ### 3.3 检查端口占用
 
 ```bash
-ss -lntup | egrep ':80|:443|:8080'
+ss -lntup | egrep ':8088|:8443|:8080'
 ```
 
-如果 80 或 443 已被其他进程占用，应先确认该进程用途，不得直接强制停止未知生产进程。
+如果 8088、8443 已被其他进程占用，应先确认该进程用途，不得直接强制停止未知生产进程。如果服务器上原本运行了 httpd、其他 Web 中间件或上一版 Nginx 占用了 80/443，迁移到本规划端口后可一并下线，但务必先与业务确认。
 
 ### 3.4 检查 SELinux 状态
 
@@ -413,9 +430,46 @@ nginx version: nginx/1.31.1
 
 ---
 
-## 7. OS 内核与资源限制配置
+## 7. 配置环境变量
 
-### 7.1 配置 sysctl 参数
+Nginx 通过源码编译安装到 `/data/module/nginx1.31.1` 并通过稳定软链接 `/data/module/nginx` 使用。为方便在任意路径直接调用 `nginx` 命令，统一将自定义环境变量维护到 `/etc/profile.d/myenv.sh`，避免为单个软件单独创建脚本文件。
+
+### 7.1 写入环境变量
+
+```bash
+cat >> /etc/profile.d/myenv.sh << 'EOF'
+
+# Nginx
+export NGINX_HOME=/data/module/nginx
+export PATH=$NGINX_HOME/sbin:$PATH
+EOF
+
+chmod 644 /etc/profile.d/myenv.sh
+```
+
+说明：
+
+- 使用 `>>` 追加，保留 `myenv.sh` 中其他软件（如 MySQL、Redis）已写入的环境变量；
+- `NGINX_HOME` 指向稳定软链接 `/data/module/nginx`，升级版本时只需切换软链接，环境变量无需修改；
+- `PATH` 优先级中 `NGINX_HOME/sbin` 放在最前，避免被系统其他位置可能存在的 `nginx` 命令覆盖。
+
+### 7.2 加载并验证
+
+```bash
+source /etc/profile.d/myenv.sh
+
+echo $NGINX_HOME
+which nginx
+nginx -v
+```
+
+预期 `which nginx` 输出为 `/data/module/nginx/sbin/nginx`，`nginx -v` 输出版本号 `nginx/1.31.1`。新登录的会话会自动加载 `myenv.sh`，无需每次手动 `source`。
+
+---
+
+## 8. OS 内核与资源限制配置
+
+### 8.1 配置 sysctl 参数
 
 不要直接反复向 `/etc/sysctl.conf` 追加配置。生产建议使用独立配置文件，便于维护和回滚。
 
@@ -460,7 +514,7 @@ sysctl net.ipv4.ip_local_port_range
 sysctl fs.file-max
 ```
 
-### 7.2 文件句柄数限制
+### 8.2 文件句柄数限制
 
 Nginx 高并发连接依赖文件描述符。生产环境必须提高文件句柄限制。
 
@@ -473,19 +527,19 @@ root hard nofile 200000
 EOF
 ```
 
-systemd 服务中也需要设置 `LimitNOFILE=200000`，见 [12. systemd 服务配置](#12-systemd-服务配置)。
+systemd 服务中也需要设置 `LimitNOFILE=200000`，见 [13. systemd 服务配置](#13-systemd-服务配置)。
 
 ---
 
-## 8. 目录、用户与权限
+## 9. 目录、用户与权限
 
-### 8.1 创建 nginx 用户
+### 9.1 创建 nginx 用户
 
 ```bash
 id nginx || useradd -r -s /sbin/nologin nginx
 ```
 
-### 8.2 创建运行目录
+### 9.2 创建运行目录
 
 ```bash
 mkdir -p /data/module/nginx/conf/conf.d
@@ -517,7 +571,7 @@ mkdir -p /data/soft/www/vue-app/backup
 | `/data/soft/www/vue-app/backup`   | 前端回滚备份目录        |
 
 
-### 8.3 设置权限
+### 9.3 设置权限
 
 ```bash
 chown -R root:root /data/module/nginx
@@ -542,15 +596,15 @@ chmod 644 /data/module/nginx/conf/certs/*.crt 2>/dev/null || true
 
 ---
 
-## 9. Nginx 标准化配置文件写入
+## 10. Nginx 标准化配置文件写入
 
-### 9.1 备份默认配置
+### 10.1 备份默认配置
 
 ```bash
 cp /data/module/nginx/conf/nginx.conf /data/module/nginx/conf/nginx.conf.bak.$(date +%F-%H%M%S)
 ```
 
-### 9.2 写入主配置文件
+### 10.2 写入主配置文件
 
 ```bash
 cat > /data/module/nginx/conf/nginx.conf << 'EOF'
@@ -624,31 +678,75 @@ http {
         ''      close;
     }
 
+    # ---------- 公网入口基础防护：限流共享内存区 ----------
+    # 1) 全局 per-IP 限流：普通页面/静态资源
+    limit_req_zone  $binary_remote_addr zone=perip_req:10m  rate=20r/s;
+    # 2) /api/ 路径限流
+    limit_req_zone  $binary_remote_addr zone=api_req:10m    rate=10r/s;
+    # 3) 登录/敏感接口限流（防爆破）
+    limit_req_zone  $binary_remote_addr zone=login_req:10m  rate=5r/m;
+    # 4) per-IP 并发连接数
+    limit_conn_zone $binary_remote_addr zone=perip_conn:10m;
+    # 超限响应码：429 比默认的 503 更符合语义，监控告警识别更直观
+    limit_req_status  429;
+    limit_conn_status 429;
+    # ----------------------------------------------------
+
     include /data/module/nginx/conf/conf.d/*.conf;
 }
 EOF
 ```
 
-### 9.3 主配置说明
+### 10.3 主配置说明
 
 
-| 配置项                           | 说明                       |
-| ----------------------------- | ------------------------ |
-| `worker_processes auto`       | 根据 CPU 自动设置 worker 数量    |
-| `worker_connections 65535`    | 单 worker 最大连接数上限         |
-| `worker_rlimit_nofile 200000` | Nginx 进程文件句柄上限           |
-| `server_tokens off`           | 隐藏 Nginx 版本号，减少信息暴露      |
-| `gzip on`                     | 开启 gzip 压缩，降低静态资源传输体积    |
-| `open_file_cache`             | 缓存静态文件元信息，提高静态资源访问效率     |
-| `log_format main`             | 增加 upstream 耗时，便于排查后端慢请求 |
-| `map $http_upgrade`           | 为 WebSocket 代理预留标准变量     |
+| 配置项                           | 说明                                     |
+| ----------------------------- | -------------------------------------- |
+| `worker_processes auto`       | 根据 CPU 自动设置 worker 数量                  |
+| `worker_connections 65535`    | 单 worker 最大连接数上限                       |
+| `worker_rlimit_nofile 200000` | Nginx 进程文件句柄上限                         |
+| `server_tokens off`           | 隐藏 Nginx 版本号，减少信息暴露                    |
+| `gzip on`                     | 开启 gzip 压缩，降低静态资源传输体积                  |
+| `open_file_cache`             | 缓存静态文件元信息，提高静态资源访问效率                   |
+| `log_format main`             | 增加 upstream 耗时，便于排查后端慢请求               |
+| `map $http_upgrade`           | 为 WebSocket 代理预留标准变量                   |
+| `limit_req_zone perip_req`    | 全局每 IP 限流共享内存区，20r/s                   |
+| `limit_req_zone api_req`      | `/api/` 路径限流共享内存区，10r/s                |
+| `limit_req_zone login_req`    | 登录接口限流共享内存区，5r/min（防爆破）                |
+| `limit_conn_zone perip_conn`  | 每 IP 并发连接数共享内存区                        |
+| `limit_req_status 429`        | 限流命中返回 `429 Too Many Requests`，监控告警更直观 |
 
+
+### 10.4 公网入口防护配置说明
+
+主配置中的 `limit_req_zone`/`limit_conn_zone` 只是**定义共享内存区**，本身不触发限流。真正的限流由站点配置（第 11、12 章）中的 `limit_req`、`limit_conn` 指令引用共享内存区后生效。
+
+阈值选取原则：
+
+- **POC 与中小业务的宽松保守值**：全局 20r/s + burst 40，足以应对正常用户和扫描器混合流量，不会误伤业务；
+- `**/api/` 接口**：10r/s + burst 20，覆盖一般前端调用峰值；
+- `**/api/auth/login` 等登录类接口**：5 次/分钟，专门针对密码爆破和验证码穷举。正常用户登录一分钟内尝试不会超过 2-3 次；
+- **并发连接 `perip_conn 50`**：留出 keep-alive、HTTP/2 多路复用、图片资源并行下载所需空间。
+
+阈值校准方法：
+
+- 上线后观察一周 `error.log` 中 `limiting requests` 和 `limiting connections` 出现频率；
+- 如果**正常业务**频繁被限，按 1.5 ~ 2 倍逐步放宽；
+- 如果**爬虫/扫描**仍能正常打到后端，按 0.5 ~ 0.7 倍逐步收紧；
+- 不要一开始就把阈值设得过紧或过松。
+
+不应该在单体 Nginx 上加的（避免过度设计）：
+
+- ModSecurity / Naxsi 等 WAF 模块：规则维护成本远高于单体场景收益，误杀率高；
+- 大型 IP 黑名单或 GeoIP 国别封锁：除非业务明确只面向特定国家；
+- 复杂 User-Agent 黑名单：扫描器轮换 UA 成本极低，且容易误杀搜索引擎、监控、健康检查；
+- fail2ban 联动封禁：单体 + 低流量场景规则维护负担过重，公网映射端口本身已大幅降噪。
 
 ---
 
-## 10. Vue 前端站点配置
+## 11. Vue 前端站点配置
 
-### 10.1 准备示例前端目录
+### 11.1 准备示例前端目录
 
 实际生产中，`dist` 目录应由 CI/CD 或发布人员上传。本文先准备一个最小示例页面，用于验证 Nginx 是否正常工作。
 
@@ -684,9 +782,9 @@ npm run build
 /data/soft/www/vue-app/releases/20260616_120000/
 ```
 
-### 10.2 写入 HTTP 站点配置
+### 11.2 写入 HTTP 站点配置
 
-如果暂时没有 HTTPS 证书，可先使用 HTTP 配置完成基础部署验证。
+如果暂时没有 HTTPS 证书，可先使用 HTTP 配置完成基础部署验证。本节同时演示 `default_server` 兜底、限流、敏感路径屏蔽等公网入口必备防护，配置整体不长，但缺一不可。
 
 ```bash
 cat > /data/module/nginx/conf/conf.d/vue-app.conf << 'EOF'
@@ -695,15 +793,36 @@ upstream vue_app_backend {
     keepalive 32;
 }
 
+# ---------- default_server 兜底 ----------
+# 拒绝裸 IP / 未知 Host 访问，扫描器收到 444 直接断连
 server {
-    listen 80;
-    server_name example.com;
+    listen 8088 default_server;
+    server_name _;
+    return 444;
+}
+# -----------------------------------------
+
+server {
+    listen 8088;
+    server_name example.com <公网IP> <内网IP>;
+    # ↑ 同时允许域名访问和裸 IP 访问。将占位符替换为现场真实 IP，
+    #   例如：server_name example.com 203.0.113.10 192.168.1.100;
+    #   未列入的 Host（含其他乱填 Host）会被上面的 default_server 兜底块掐断。
 
     root /data/soft/www/vue-app/current;
     index index.html;
 
     access_log /data/module/nginx/logs/vue-app-access.log main;
     error_log  /data/module/nginx/logs/vue-app-error.log warn;
+
+    # ---------- 基础防护 ----------
+    limit_conn perip_conn 50;
+    limit_req  zone=perip_req burst=40 nodelay;
+
+    # 敏感路径屏蔽：拒绝访问 .git/.env/备份文件等
+    location ~ /\.(git|svn|hg|env|DS_Store) { deny all; return 404; }
+    location ~* \.(bak|sql|swp|old|orig|save|log)$ { deny all; return 404; }
+    # ------------------------------
 
     add_header X-Content-Type-Options "nosniff" always;
     add_header X-Frame-Options "SAMEORIGIN" always;
@@ -735,10 +854,15 @@ server {
         try_files $uri =404;
     }
 
-    location /api/ {
+    # 登录类敏感接口：单独加严限流（防爆破）
+    location = /api/auth/login {
+        rewrite ^/api/(.*)$ /$1 break;
+        limit_req zone=login_req burst=3 nodelay;
+
         proxy_pass http://vue_app_backend;
         proxy_http_version 1.1;
 
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -754,6 +878,37 @@ server {
         proxy_buffer_size 16k;
         proxy_buffers 8 64k;
         proxy_busy_buffers_size 128k;
+
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 2;
+    }
+
+    location /api/ {
+        rewrite ^/api/(.*)$ /$1 break;
+        limit_req zone=api_req burst=20 nodelay;
+
+        proxy_pass http://vue_app_backend;
+        proxy_http_version 1.1;
+
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 8 64k;
+        proxy_busy_buffers_size 128k;
+
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 2;
     }
 
     location /ws/ {
@@ -786,12 +941,15 @@ EOF
 ```
 
 需要将 `server_name example.com` 替换为真实域名或内网访问域名。如果没有域名，可临时使用服务器 IP 访问，但生产环境建议使用域名。
+此外 `server_name` 中的 `<公网IP>`、`<内网IP>` 占位符也必须替换为现场真实 IP，可通过 `ip addr` 在服务器上查询，公网映射 IP 由网络/运维同事提供。如果只想用域名访问，删掉两个占位符即可。
 
-### 10.3 API 路径转发规则说明
+> 注：本节示例仅为"HTTP 端口（8088）已能独立提供业务"的最小可运行配置，用于无证书阶段的部署验证。**生产公网入口必须使用 HTTPS，请直接采用第 12 章 HTTPS 配置**，届时 8088 端口的角色会变成"301 跳转 HTTPS"，不再独立承载业务。
 
-`proxy_pass` 是否带尾部 `/` 会影响转发路径，必须按后端实际接口统一确认。
+### 11.3 API 路径转发规则说明
 
-#### 方案 A：保留 `/api/` 前缀
+`proxy_pass` 是否带尾部 `/`、是否配合 `rewrite` 会影响后端收到的路径，必须按后端实际接口统一确认。
+
+#### 方案 A：保留 `/api/` 前缀（后端接口路径自带 `/api`）
 
 ```nginx
 location /api/ {
@@ -805,7 +963,7 @@ location /api/ {
 /api/user/list -> 后端收到 /api/user/list
 ```
 
-#### 方案 B：去掉 `/api/` 前缀
+#### 方案 B：通过 `proxy_pass` 尾部斜杠去掉 `/api/` 前缀
 
 ```nginx
 location /api/ {
@@ -819,7 +977,7 @@ location /api/ {
 /api/user/list -> 后端收到 /user/list
 ```
 
-#### 方案 C：使用 rewrite 显式改写
+#### 方案 C：使用 `rewrite` 显式改写（**本文档采用**）
 
 ```nginx
 location /api/ {
@@ -834,13 +992,20 @@ location /api/ {
 /api/user/list -> 后端收到 /user/list
 ```
 
-**推荐：** 业务系统优先选择方案 A，保留 `/api/` 前缀。这样前端、网关、后端接口路径一致，排障最直观。如果后端接口天然不包含 `/api/`，再选择方案 B 或方案 C。
+**推荐：** 本文档生产基准统一采用 **方案 C：rewrite 显式剥离 `/api/` 前缀**。原因：
+
+- 后端接口路径**不带 `/api/`**（如 `/user/list`、`/auth/login`），可独立部署、独立测试，`curl http://backend:8080/user/list` 直连即可验证；
+- 网关层面统一加 `/api/` 业务前缀，前后端职责清晰、解耦彻底；
+- 与方案 B 相比，`rewrite` 行为更显式，配置阅读时 `proxy_pass` 是否带 `/` 不再有歧义，多人维护更不易出错；
+- 与方案 A 相比，更符合 Spring Cloud Gateway、Kong、APISIX 等主流网关"前缀剥离"的统一做法，未来从单体 Nginx 演进到网关集群迁移成本最低。
+
+如果某个具体接口的后端**确实**自带 `/api/` 前缀，可在 `location` 内移除 `rewrite` 那一行单独保留前缀（属个例处理，应在 PR/上线评审时单独说明）。
 
 ---
 
-## 11. HTTPS 证书配置
+## 12. HTTPS 证书配置
 
-### 11.1 上传证书文件
+### 12.1 上传证书文件
 
 将证书文件上传到：
 
@@ -857,16 +1022,16 @@ chmod 644 /data/module/nginx/conf/certs/example.com.crt
 chmod 600 /data/module/nginx/conf/certs/example.com.key
 ```
 
-### 11.2 生成 DH 参数文件
+### 12.2 生成 DH 参数文件
 
 ```bash
 openssl dhparam -out /data/module/nginx/conf/certs/dhparam.pem 2048
 chmod 644 /data/module/nginx/conf/certs/dhparam.pem
 ```
 
-### 11.3 HTTP 跳转 HTTPS 配置
+### 12.3 HTTP 跳转 HTTPS 配置
 
-公网生产系统推荐 HTTP 仅用于跳转 HTTPS。
+公网生产系统推荐 HTTP（内网监听端口 `8088`）仅用于跳转 HTTPS（内网监听端口 `8443`）。本节同步给出 `default_server` 兜底、限流、敏感路径屏蔽、登录接口加严等全部公网入口必备防护，**这是生产入口的最终形态**。
 
 ```bash
 cat > /data/module/nginx/conf/conf.d/vue-app.conf << 'EOF'
@@ -875,15 +1040,41 @@ upstream vue_app_backend {
     keepalive 32;
 }
 
+# ---------- default_server 兜底（HTTP 8088）----------
 server {
-    listen 80;
-    server_name example.com;
-    return 301 https://$host$request_uri;
+    listen 8088 default_server;
+    server_name _;
+    return 444;
 }
 
+# ---------- default_server 兜底（HTTPS 8443）----------
+# 复用同一份证书即可，未知 Host 直接 444
 server {
-    listen 443 ssl http2;
-    server_name example.com;
+    listen 8443 ssl http2 default_server;
+    server_name _;
+    ssl_certificate     /data/module/nginx/conf/certs/example.com.crt;
+    ssl_certificate_key /data/module/nginx/conf/certs/example.com.key;
+    ssl_protocols TLSv1.2;
+    return 444;
+}
+
+# ---------- HTTP → HTTPS 301 跳转 ----------
+server {
+    listen 8088;
+    server_name example.com <公网IP> <内网IP>;
+    # ↑ 域名 + IP 均跳转 HTTPS。$host 会保留访问端使用的主机名，
+    #   保证用 IP 访问 HTTP 时也会被跳到对应 IP 的 HTTPS（仅会带证书告警，详见第 21.10）。
+    return 301 https://$host:8443$request_uri;
+}
+
+# ---------- HTTPS 业务入口 ----------
+server {
+    listen 8443 ssl http2;
+    server_name example.com <公网IP> <内网IP>;
+    # ↑ 同时允许域名访问和裸 IP 访问。将占位符替换为现场真实 IP，
+    #   例如：server_name example.com 203.0.113.10 192.168.1.100;
+    #   未匹配的 Host 会被上面的 default_server 兜底块掐断。
+    #   注意：HTTPS 用 IP 访问会触发浏览器证书告警，详见第 21.10。
 
     root /data/soft/www/vue-app/current;
     index index.html;
@@ -907,6 +1098,15 @@ server {
     add_header X-Frame-Options "SAMEORIGIN" always;
     add_header Referrer-Policy "strict-origin-when-cross-origin" always;
     add_header X-XSS-Protection "1; mode=block" always;
+
+    # ---------- 基础防护 ----------
+    limit_conn perip_conn 50;
+    limit_req  zone=perip_req burst=40 nodelay;
+
+    # 敏感路径屏蔽：拒绝访问 .git/.env/备份文件等
+    location ~ /\.(git|svn|hg|env|DS_Store) { deny all; return 404; }
+    location ~* \.(bak|sql|swp|old|orig|save|log)$ { deny all; return 404; }
+    # ------------------------------
 
     location = /favicon.ico {
         access_log off;
@@ -933,10 +1133,16 @@ server {
         try_files $uri =404;
     }
 
-    location /api/ {
+    # 登录类敏感接口：单独加严限流（5r/min，防爆破）
+    # 实际路径请按后端真实接口调整（如 /api/login、/api/user/login 等）
+    location = /api/auth/login {
+        rewrite ^/api/(.*)$ /$1 break;
+        limit_req zone=login_req burst=3 nodelay;
+
         proxy_pass http://vue_app_backend;
         proxy_http_version 1.1;
 
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
@@ -952,6 +1158,37 @@ server {
         proxy_buffer_size 16k;
         proxy_buffers 8 64k;
         proxy_busy_buffers_size 128k;
+
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 2;
+    }
+
+    location /api/ {
+        rewrite ^/api/(.*)$ /$1 break;
+        limit_req zone=api_req burst=20 nodelay;
+
+        proxy_pass http://vue_app_backend;
+        proxy_http_version 1.1;
+
+        proxy_set_header Connection "";
+        proxy_set_header Host $host;
+        proxy_set_header X-Real-IP $remote_addr;
+        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 8 64k;
+        proxy_busy_buffers_size 128k;
+
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 2;
     }
 
     location /ws/ {
@@ -983,16 +1220,22 @@ server {
 EOF
 ```
 
-### 11.4 HTTPS 配置说明
+### 12.4 HTTPS 与防护配置说明
 
 
-| 配置项                         | 说明                                 |
-| --------------------------- | ---------------------------------- |
-| `listen 443 ssl http2`      | 启用 HTTPS 和 HTTP/2                  |
-| `ssl_protocols TLSv1.2`     | CentOS 7.9 系统 OpenSSL 默认适合 TLS 1.2 |
-| `ssl_session_cache`         | 启用 TLS 会话缓存，减少握手开销                 |
-| `ssl_session_tickets off`   | 降低会话票据密钥管理风险                       |
-| `Strict-Transport-Security` | 强制浏览器后续使用 HTTPS，公网确认 HTTPS 稳定后再启用  |
+| 配置项                                         | 说明                                           |
+| ------------------------------------------- | -------------------------------------------- |
+| `listen 8443 ssl http2`                     | 启用 HTTPS 和 HTTP/2，使用非特权端口 8443               |
+| `listen 8443 ssl ... default_server`        | 兜底拦截裸 IP / 未知 Host 的扫描器请求，返回 444 不回包         |
+| `ssl_protocols TLSv1.2`                     | CentOS 7.9 系统 OpenSSL 默认适合 TLS 1.2           |
+| `ssl_session_cache`                         | 启用 TLS 会话缓存，减少握手开销                           |
+| `ssl_session_tickets off`                   | 降低会话票据密钥管理风险                                 |
+| `Strict-Transport-Security`                 | 强制浏览器后续使用 HTTPS，公网确认 HTTPS 稳定后再启用            |
+| `limit_conn perip_conn 50`                  | 单 IP 并发连接上限 50，留出 HTTP/2 多路复用和图片并行下载所需空间     |
+| `limit_req zone=perip_req burst=40 nodelay` | 全局每 IP 限流 20r/s，瞬时突发 40 个                    |
+| `limit_req zone=api_req burst=20 nodelay`   | `/api/` 限流 10r/s，瞬时突发 20 个                   |
+| `limit_req zone=login_req burst=3 nodelay`  | `/api/auth/login` 限流 5r/min，专门防密码爆破          |
+| 敏感路径屏蔽                                      | `.git`、`.env`、`.bak`、`.sql` 等扫描器最常探测路径直接 404 |
 
 
 如果使用新版 OpenSSL 编译并确认支持 TLS 1.3，可调整为：
@@ -1001,11 +1244,13 @@ EOF
 ssl_protocols TLSv1.2 TLSv1.3;
 ```
 
+> **注：登录接口路径示意为 `/api/auth/login`，请按后端真实接口替换**（常见的还有 `/api/login`、`/api/user/login`、`/api/v1/auth/login` 等）。如果业务有验证码、短信验证码等接口，同样建议挂上 `login_req` 限流区。
+
 ---
 
-## 12. systemd 服务配置
+## 13. systemd 服务配置
 
-### 12.1 写入 systemd 服务文件
+### 13.1 写入 systemd 服务文件
 
 ```bash
 cat > /etc/systemd/system/nginx.service << 'EOF'
@@ -1033,14 +1278,14 @@ WantedBy=multi-user.target
 EOF
 ```
 
-### 12.2 加载并设置开机自启
+### 13.2 加载并设置开机自启
 
 ```bash
 systemctl daemon-reload
 systemctl enable nginx
 ```
 
-### 12.3 校验配置
+### 13.3 校验配置
 
 ```bash
 /data/module/nginx/sbin/nginx -t -c /data/module/nginx/conf/nginx.conf
@@ -1050,78 +1295,137 @@ systemctl enable nginx
 
 ---
 
-## 13. 网络边界与访问控制
+## 14. 网络边界与访问控制（可选）
 
-本文不维护本机 `firewalld` 规则，主机防火墙基线由《CentOS7.9生产环境初始化手册.md》统一规定。
+本文不维护本机 `firewalld` 规则的全部细节（主机防火墙基线由《CentOS7.9生产环境初始化手册.md》统一规定），但 Nginx 端口切换到 `8088/8443` 后，本机和外层防火墙都需要做对应调整。
 
-部署前需要确认以下事项：
+### 14.1 部署原则
 
 - HTTP/HTTPS 端口仅对可信网络开放，不得直接暴露到公网；
+- Nginx 内网监听 `8088`（HTTP 跳转）和 `8443`（HTTPS 业务），不监听 `80/443`；
+- 公网入口通过外层防火墙、安全组、负载均衡 NAT 映射到内网 `8443`，公网端口由网络/运维统一规划（可以是 80、443 或其他端口）；
 - 管理端口和业务端口应分离授权；
 - 访问来源、端口用途和开放范围必须由外层防火墙、安全组、ACL、VPN、堡垒机或统一网络策略控制；
 - 访问策略变更应记录到资产台账或网络策略记录；
 - 如果 Nginx 和后端部署在同机，后端服务建议只监听 `127.0.0.1` 或内网 IP；分机部署时，后端服务器只允许 Nginx 服务器内网 IP 访问后端端口。
 
+### 14.2 本机 firewalld 规则调整（按现场实际执行）
+
+如果服务器使用 firewalld 且原本开放了 80/443，需要按下列步骤切换：
+
+```bash
+firewall-cmd --permanent --add-port=8088/tcp
+firewall-cmd --permanent --add-port=8443/tcp
+firewall-cmd --permanent --remove-service=http   2>/dev/null
+firewall-cmd --permanent --remove-service=https  2>/dev/null
+firewall-cmd --permanent --remove-port=80/tcp    2>/dev/null
+firewall-cmd --permanent --remove-port=443/tcp   2>/dev/null
+firewall-cmd --reload
+firewall-cmd --list-all
+```
+
+如果服务器使用 iptables，则按企业 iptables 规范同步调整放行规则，原则一致。
+
+### 14.3 外层防火墙 NAT 映射调整
+
+由网络/运维同事在公网入口防火墙、负载均衡或安全组上执行：
+
+- 公网 HTTPS 端口（例如 443 或自定义端口） → 内网 `服务器IP:8443`；
+- 公网 HTTP 端口（可选，仅用于跳转） → 内网 `服务器IP:8088`；
+- 删除旧的 "公网端口 → 80/443" 的 NAT 规则。
+
+> POC 阶段如果不需要 HTTP 跳转入口，可只映射 8443，让公网用户直接走 HTTPS。
+
 ---
 
-## 14. 启动与基础验证
+## 15. 启动与基础验证
 
-### 14.1 启动 Nginx
+### 15.1 启动 Nginx
 
 ```bash
 systemctl start nginx
 systemctl status nginx
 ```
 
-### 14.2 查看监听端口
+### 15.2 查看监听端口
 
 ```bash
-ss -lntup | egrep ':80|:443'
+ss -lntup | egrep ':8088|:8443'
 ```
 
-### 14.3 本机访问验证
+应只看到 `8088` 和 `8443`，没有 `80/443`。
 
-HTTP 验证：
+### 15.3 本机访问验证
+
+HTTP 端口（8088）验证，应返回 301 跳转：
 
 ```bash
-curl -I http://127.0.0.1/
-curl http://127.0.0.1/
+curl -I http://127.0.0.1:8088/
 ```
 
-HTTPS 验证：
+HTTPS 端口（8443）验证：
 
 ```bash
-curl -k -I https://127.0.0.1/
+curl -k -I https://127.0.0.1:8443/
+curl -k https://127.0.0.1:8443/
 ```
 
 如果配置了域名但 DNS 尚未生效，可使用 `--resolve` 临时验证：
 
 ```bash
-curl -k --resolve example.com:443:127.0.0.1 https://example.com/
+curl -k --resolve example.com:8443:127.0.0.1 https://example.com:8443/
 ```
 
-### 14.4 Vue history 路由验证
+### 15.4 Vue history 路由验证
 
 ```bash
-curl -I http://127.0.0.1/user/list
+curl -k -I https://127.0.0.1:8443/user/list
 ```
 
 期望返回 `200`，并实际回退到 `index.html`。
 
-### 14.5 API 代理验证
+### 15.5 API 代理验证
 
 后端服务启动后验证：
 
 ```bash
-curl -I http://127.0.0.1/api/health
+curl -k -I https://127.0.0.1:8443/api/health
 ```
 
 如后端未启动，通常会返回 `502 Bad Gateway`，此时应检查 upstream 地址和后端服务状态。
 
-### 14.6 状态页验证
+### 15.6 基础防护验证
+
+裸 IP / 未知 Host 应被 `default_server` 拦截（返回空响应 / 连接关闭）：
 
 ```bash
-curl http://127.0.0.1/nginx_status
+curl -k -I https://127.0.0.1:8443/ -H "Host: scanner.example.com"
+```
+
+敏感路径应返回 404：
+
+```bash
+curl -k -I https://127.0.0.1:8443/.git/config
+curl -k -I https://127.0.0.1:8443/backup.sql
+```
+
+限流验证（短时间高频请求，应出现 429）：
+
+```bash
+for i in {1..80}; do curl -ks -o /dev/null -w "%{http_code} " https://127.0.0.1:8443/; done; echo
+```
+
+登录接口加严限流验证（连续访问 5 次以上应快速出现 429）：
+
+```bash
+for i in {1..10}; do curl -ks -o /dev/null -w "%{http_code} " -X POST https://127.0.0.1:8443/api/auth/login; done; echo
+```
+
+### 15.7 状态页验证
+
+```bash
+curl http://127.0.0.1:8088/nginx_status   # 8088 默认 server 返回 444，需要带正确 Host 才会进入业务 server
+curl -k https://127.0.0.1:8443/nginx_status -H "Host: example.com"
 ```
 
 示例输出：
@@ -1135,11 +1439,11 @@ Reading: 0 Writing: 1 Waiting: 0
 
 ---
 
-## 15. 生产验证清单
+## 16. 生产验证清单
 
 上线前必须完成以下检查。
 
-### 15.1 安装与进程检查
+### 16.1 安装与进程检查
 
 ```bash
 /data/module/nginx/sbin/nginx -v
@@ -1156,24 +1460,26 @@ ps -ef | grep nginx | grep -v grep
 - systemd 状态为 `active (running)`；
 - 开机自启已启用。
 
-### 15.2 端口检查
+### 16.2 端口检查
 
 ```bash
-ss -lntup | egrep ':80|:443'
+ss -lntup | egrep ':8088|:8443'
 ```
 
 确认：
 
-- 只监听预期端口；
-- 没有额外暴露未规划端口。
+- 只监听预期端口（`8088`、`8443`）；
+- 没有额外暴露未规划端口；
+- 没有遗留的 `80/443` 监听。
 
-### 15.3 前端访问检查
+### 16.3 前端访问检查
 
 ```bash
-curl -I http://127.0.0.1/
-curl -I http://127.0.0.1/index.html
-curl -I http://127.0.0.1/assets/app.js
-curl -I http://127.0.0.1/non-exist-route
+curl -kI https://127.0.0.1:8443/
+curl -kI https://127.0.0.1:8443/index.html
+curl -kI https://127.0.0.1:8443/assets/app.js
+curl -kI https://127.0.0.1:8443/non-exist-route
+curl -I  http://127.0.0.1:8088/
 ```
 
 确认：
@@ -1182,23 +1488,24 @@ curl -I http://127.0.0.1/non-exist-route
 - Vue history 路由刷新返回 `200`；
 - 静态资源存在时返回 `200`，不存在时返回 `404`；
 - `index.html` 不强缓存；
-- 带 hash 的静态资源长缓存。
+- 带 hash 的静态资源长缓存；
+- `8088` 访问返回 `301` 跳转 `https://...:8443/...`。
 
-### 15.4 HTTPS 检查
+### 16.4 HTTPS 检查
 
 ```bash
-curl -k -I https://127.0.0.1/
-openssl s_client -connect 127.0.0.1:443 -servername example.com </dev/null
+curl -k -I https://127.0.0.1:8443/
+openssl s_client -connect 127.0.0.1:8443 -servername example.com </dev/null
 ```
 
 确认：
 
 - 证书链有效；
 - 私钥权限安全；
-- HTTP 能跳转 HTTPS；
+- HTTP（`8088`）能跳转 HTTPS（`8443`）；
 - 只启用符合企业安全要求的 TLS 协议。
 
-### 15.5 日志检查
+### 16.5 日志检查
 
 ```bash
 ls -lh /data/module/nginx/logs
@@ -1212,25 +1519,31 @@ tail -n 50 /data/module/nginx/logs/vue-app-access.log
 - 错误日志无持续异常；
 - 日志目录权限正确。
 
-### 15.6 安全检查
+### 16.6 安全检查
 
 ```bash
-curl -I http://127.0.0.1/
-curl -I http://127.0.0.1/nginx_status
+curl -kI https://127.0.0.1:8443/
+curl -kI https://127.0.0.1:8443/.git/config
+curl -kI https://127.0.0.1:8443/backup.sql
+curl -kI https://127.0.0.1:8443/nginx_status -H "Host: example.com"
+for i in {1..80}; do curl -ks -o /dev/null -w "%{http_code} " https://127.0.0.1:8443/; done; echo
+for i in {1..10}; do curl -ks -o /dev/null -w "%{http_code} " -X POST https://127.0.0.1:8443/api/auth/login; done; echo
 ```
 
 确认：
 
 - 响应头不暴露 Nginx 具体版本；
+- 敏感路径（`.git`、`.env`、`.bak`、`.sql` 等）返回 `404`；
 - `nginx_status` 只允许本机或监控 IP 访问；
 - Web 根目录不可访问证书、配置、备份文件；
-- API 后端端口没有对公网直接暴露。
+- API 后端端口没有对公网直接暴露；
+- 高频请求能触发 `429`，登录接口爆破前几次能触发 `429`。
 
 ---
 
-## 16. 运维检查命令
+## 17. 运维检查命令
 
-### 16.1 常用 systemd 命令
+### 17.1 常用 systemd 命令
 
 ```bash
 systemctl status nginx
@@ -1242,7 +1555,7 @@ systemctl enable nginx
 systemctl disable nginx
 ```
 
-### 16.2 Nginx 常用命令
+### 17.2 Nginx 常用命令
 
 ```bash
 /data/module/nginx/sbin/nginx -v
@@ -1252,14 +1565,14 @@ systemctl disable nginx
 /data/module/nginx/sbin/nginx -s quit
 ```
 
-### 16.3 查看连接与端口
+### 17.3 查看连接与端口
 
 ```bash
 ss -lntup | grep nginx
 ss -ant | awk '{print $1}' | sort | uniq -c
 ```
 
-### 16.4 查看日志
+### 17.4 查看日志
 
 ```bash
 tail -f /data/module/nginx/logs/access.log
@@ -1268,20 +1581,20 @@ tail -f /data/module/nginx/logs/vue-app-access.log
 tail -f /data/module/nginx/logs/vue-app-error.log
 ```
 
-### 16.5 查看资源占用
+### 17.5 查看资源占用
 
 ```bash
 ps -eo pid,ppid,user,cmd,%cpu,%mem --sort=-%cpu | grep nginx
 top -p $(pgrep -d',' nginx)
 ```
 
-### 16.6 统计访问状态码
+### 17.6 统计访问状态码
 
 ```bash
 awk '{print $9}' /data/module/nginx/logs/vue-app-access.log | sort | uniq -c | sort -nr
 ```
 
-### 16.7 统计慢请求
+### 17.7 统计慢请求
 
 ```bash
 awk '{for(i=1;i<=NF;i++){if($i ~ /^rt=/){split($i,a,"="); if(a[2] > 1) print $0}}}' /data/module/nginx/logs/vue-app-access.log
@@ -1289,9 +1602,9 @@ awk '{for(i=1;i<=NF;i++){if($i ~ /^rt=/){split($i,a,"="); if(a[2] > 1) print $0}
 
 ---
 
-## 17. 前端发布、回滚与缓存刷新
+## 18. 前端发布、回滚与缓存刷新
 
-### 17.1 推荐发布目录结构
+### 18.1 推荐发布目录结构
 
 ```text
 /data/soft/www/vue-app/
@@ -1302,7 +1615,7 @@ awk '{for(i=1;i<=NF;i++){if($i ~ /^rt=/){split($i,a,"="); if(a[2] > 1) print $0}
 └── backup/
 ```
 
-### 17.2 发布新版本
+### 18.2 发布新版本
 
 假设新的 Vue 构建产物已上传到 `/tmp/dist`。
 
@@ -1318,15 +1631,15 @@ ln -sfn ${release_dir} /data/soft/www/vue-app/current
 systemctl reload nginx
 ```
 
-### 17.3 验证新版本
+### 18.3 验证新版本
 
 ```bash
-curl -I http://127.0.0.1/
-curl -I http://127.0.0.1/index.html
+curl -kI https://127.0.0.1:8443/
+curl -kI https://127.0.0.1:8443/index.html
 readlink -f /data/soft/www/vue-app/current
 ```
 
-### 17.4 回滚到上一版本
+### 18.4 回滚到上一版本
 
 查看版本目录：
 
@@ -1346,10 +1659,10 @@ systemctl reload nginx
 
 ```bash
 readlink -f /data/soft/www/vue-app/current
-curl -I http://127.0.0.1/
+curl -kI https://127.0.0.1:8443/
 ```
 
-### 17.5 缓存策略说明
+### 18.5 缓存策略说明
 
 Vue 前端生产部署推荐：
 
@@ -1366,9 +1679,9 @@ Vue 前端生产部署推荐：
 
 ---
 
-## 18. 停止、重启与回滚
+## 19. 停止、重启与回滚
 
-### 18.1 平滑重载配置
+### 19.1 平滑重载配置
 
 修改配置后优先使用 reload，不要直接 restart。
 
@@ -1377,7 +1690,7 @@ Vue 前端生产部署推荐：
 systemctl reload nginx
 ```
 
-### 18.2 重启 Nginx
+### 19.2 重启 Nginx
 
 只有在 reload 无法满足要求，或升级二进制后才考虑 restart。
 
@@ -1387,14 +1700,14 @@ systemctl restart nginx
 systemctl status nginx
 ```
 
-### 18.3 停止 Nginx
+### 19.3 停止 Nginx
 
 ```bash
 systemctl stop nginx
 systemctl status nginx
 ```
 
-### 18.4 配置回滚
+### 19.4 配置回滚
 
 配置变更前应先备份：
 
@@ -1410,7 +1723,7 @@ cp /data/module/nginx/conf/conf.d/vue-app.conf.bak.2026-06-16-120000 /data/modul
 systemctl reload nginx
 ```
 
-### 18.5 软件版本回滚
+### 19.5 软件版本回滚
 
 如果后续升级了 Nginx，可通过稳定软链接回滚到旧版本。
 
@@ -1424,9 +1737,9 @@ systemctl restart nginx
 
 ---
 
-## 19. 日志切割
+## 20. 日志切割
 
-### 19.1 写入 logrotate 配置
+### 20.1 写入 logrotate 配置
 
 ```bash
 cat > /etc/logrotate.d/nginx << 'EOF'
@@ -1449,7 +1762,7 @@ cat > /etc/logrotate.d/nginx << 'EOF'
 EOF
 ```
 
-### 19.2 测试 logrotate 配置
+### 20.2 测试 logrotate 配置
 
 ```bash
 logrotate -d /etc/logrotate.d/nginx
@@ -1469,9 +1782,9 @@ ls -lh /data/module/nginx/logs
 
 ---
 
-## 20. 常见问题
+## 21. 常见问题
 
-### 20.1 访问 Vue 子路由刷新后 404
+### 21.1 访问 Vue 子路由刷新后 404
 
 现象：
 
@@ -1489,7 +1802,7 @@ location / {
 }
 ```
 
-### 20.2 页面更新后用户仍看到旧版本
+### 21.2 页面更新后用户仍看到旧版本
 
 原因通常是 `index.html` 被浏览器、代理或 CDN 缓存。
 
@@ -1500,7 +1813,7 @@ location / {
 - 确认前端构建产物 JS/CSS 文件名带 hash；
 - 避免将 `index.html` 设置为长期缓存。
 
-### 20.3 API 请求 502 Bad Gateway
+### 21.3 API 请求 502 Bad Gateway
 
 常见原因：
 
@@ -1519,7 +1832,7 @@ curl -I http://127.0.0.1:8080/health
 tail -n 100 /data/module/nginx/logs/vue-app-error.log
 ```
 
-### 20.4 API 请求 504 Gateway Timeout
+### 21.4 API 请求 504 Gateway Timeout
 
 常见原因：
 
@@ -1534,23 +1847,23 @@ tail -n 100 /data/module/nginx/logs/vue-app-error.log
 - 对确实需要长时间执行的接口单独配置超时时间；
 - 大任务建议改为异步任务，不建议通过 HTTP 长时间阻塞。
 
-### 20.5 启动失败提示 bind 80 failed
+### 21.5 启动失败提示 bind failed
 
 现象：
 
 ```text
-bind() to 0.0.0.0:80 failed (98: Address already in use)
+bind() to 0.0.0.0:8443 failed (98: Address already in use)
 ```
 
 排查：
 
 ```bash
-ss -lntup | grep ':80'
+ss -lntup | grep -E ':8088|:8443'
 ```
 
-处理：确认占用进程用途。不得直接 kill 未知生产进程。
+处理：确认占用进程用途。如果是上一版 Nginx 没退完，等 `systemctl stop nginx` 完全退出后再启动；如果是其他进程，必须先确认用途，不得直接 kill 未知生产进程。如果服务器之前用过 80/443，迁移后需要确保旧的 Nginx 实例已经停止并禁用开机自启。
 
-### 20.6 worker_connections are not enough
+### 21.6 worker_connections are not enough
 
 现象：错误日志出现：
 
@@ -1566,7 +1879,7 @@ worker_connections are not enough
 - 检查是否存在大量异常长连接；
 - 检查后端慢响应是否导致连接堆积。
 
-### 20.7 上传文件失败或 413 Request Entity Too Large
+### 21.7 上传文件失败或 413 Request Entity Too Large
 
 原因：请求体超过 `client_max_body_size`。
 
@@ -1578,14 +1891,14 @@ client_max_body_size 100m;
 
 不建议无上限放大，应结合业务上传大小、网关、后端限制统一规划。
 
-### 20.8 HTTPS 证书不生效
+### 21.8 HTTPS 证书不生效
 
 排查：
 
 ```bash
 /data/module/nginx/sbin/nginx -t -c /data/module/nginx/conf/nginx.conf
 openssl x509 -in /data/module/nginx/conf/certs/example.com.crt -noout -subject -issuer -dates
-openssl s_client -connect 127.0.0.1:443 -servername example.com </dev/null
+openssl s_client -connect 127.0.0.1:8443 -servername example.com </dev/null
 ```
 
 常见原因：
@@ -1596,7 +1909,7 @@ openssl s_client -connect 127.0.0.1:443 -servername example.com </dev/null
 - 修改证书后未 reload；
 - 客户端访问的域名与证书 CN/SAN 不匹配。
 
-### 20.9 nginx_status 被外部访问
+### 21.9 nginx_status 被外部访问
 
 处理：确保状态页限制来源：
 
@@ -1611,19 +1924,62 @@ location /nginx_status {
 
 如监控服务器需要访问，只添加明确的监控服务器 IP，不要开放 `0.0.0.0/0`。
 
+### 21.10 用 IP 访问 HTTPS 时浏览器报证书告警
+
+现象：
+
+```text
+您的连接不是私密连接
+NET::ERR_CERT_COMMON_NAME_INVALID
+（或 Firefox: SSL_ERROR_BAD_CERT_DOMAIN）
+```
+
+原因：HTTPS 证书的 CN/SAN 字段绑定的是域名（如 `example.com`），不包含 IP。浏览器用 `https://203.0.113.10:8443/` 访问时，**校验"访问地址"和"证书签发对象"不一致**，于是报错。这是浏览器层面的安全机制，与 Nginx 配置无关。
+
+处理建议（按推荐顺序）：
+
+1. **优先用域名访问 HTTPS**：把服务器 IP 解析到一个域名（哪怕是 hosts 临时映射），通过域名访问 `https://example.com:8443/`，告警自动消失；
+2. **临时用 IP 访问时走 HTTP 8088**：HTTP 不涉及证书校验，POC 内网验证、curl 调试都不受影响；
+3. **可接受手动忽略**：浏览器点"高级 → 继续访问"，或 curl 加 `-k`，对内部测试可接受；
+4. **不推荐**：为了消告警去签一张包含 IP SAN 的自签名证书，单体 POC 场景维护成本高于收益。
+
+排查命令：
+
+```bash
+openssl x509 -in /data/module/nginx/conf/certs/example.com.crt \
+  -noout -subject -ext subjectAltName
+openssl s_client -connect 127.0.0.1:8443 -servername example.com </dev/null \
+  2>/dev/null | openssl x509 -noout -subject -ext subjectAltName
+```
+
+输出中 `Subject Alternative Name` 字段会列出证书绑定的域名/IP 范围。
+
 ---
 
 ## 附录 A：最小 HTTP Vue 配置模板
 
-适用于内网、测试、预生产或暂未启用 HTTPS 的环境。
+适用于内网、测试、预生产或暂未启用 HTTPS 的环境。已包含 `default_server` 兜底和基础限流，**不要在公网环境直接使用此模板（缺少 HTTPS）**。
 
 ```nginx
 server {
-    listen 80;
-    server_name example.com;
+    listen 8088 default_server;
+    server_name _;
+    return 444;
+}
+
+server {
+    listen 8088;
+    server_name example.com <公网IP> <内网IP>;
+    # ↑ 同时允许域名访问和裸 IP 访问，按现场实际 IP 替换占位符
 
     root /data/soft/www/vue-app/current;
     index index.html;
+
+    limit_conn perip_conn 50;
+    limit_req  zone=perip_req burst=40 nodelay;
+
+    location ~ /\.(git|svn|hg|env|DS_Store) { deny all; return 404; }
+    location ~* \.(bak|sql|swp|old|orig|save|log)$ { deny all; return 404; }
 
     location = /index.html {
         add_header Cache-Control "no-cache, no-store, must-revalidate" always;
@@ -1637,11 +1993,31 @@ server {
     }
 
     location /api/ {
+        rewrite ^/api/(.*)$ /$1 break;
+        limit_req zone=api_req burst=20 nodelay;
+
         proxy_pass http://127.0.0.1:8080;
+        proxy_http_version 1.1;
+
+        proxy_set_header Connection "";
         proxy_set_header Host $host;
         proxy_set_header X-Real-IP $remote_addr;
         proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto $scheme;
+        proxy_set_header X-Forwarded-Host $host;
+        proxy_set_header X-Forwarded-Port $server_port;
+
+        proxy_connect_timeout 5s;
+        proxy_send_timeout 60s;
+        proxy_read_timeout 60s;
+
+        proxy_buffering on;
+        proxy_buffer_size 16k;
+        proxy_buffers 8 64k;
+        proxy_busy_buffers_size 128k;
+
+        proxy_next_upstream error timeout http_502 http_503 http_504;
+        proxy_next_upstream_tries 2;
     }
 
     location / {
@@ -1655,22 +2031,29 @@ server {
 ## 附录 B：最终生产上线确认表
 
 
-| 检查项                        | 是否完成  |
-| -------------------------- | ----- |
-| Nginx 使用非 root 用户运行 worker | 是 / 否 |
-| systemd 托管并开机自启            | 是 / 否 |
-| 配置文件 `nginx -t` 校验通过       | 是 / 否 |
-| 80/443 端口符合规划              | 是 / 否 |
-| Vue history 路由刷新正常         | 是 / 否 |
-| API 反向代理正常                 | 是 / 否 |
-| `index.html` 未强缓存          | 是 / 否 |
-| 静态资源长缓存策略符合预期              | 是 / 否 |
-| HTTPS 证书有效                 | 是 / 否 |
-| 证书私钥权限为 `600`              | 是 / 否 |
-| `nginx_status` 未对外开放       | 是 / 否 |
-| 日志正常写入并已配置切割               | 是 / 否 |
-| 防火墙规则符合最小开放原则              | 是 / 否 |
-| 后端端口未直接暴露公网                | 是 / 否 |
-| 已验证发布与回滚流程                 | 是 / 否 |
+| 检查项                                             | 是否完成  |
+| ----------------------------------------------- | ----- |
+| Nginx 使用非 root 用户运行 worker                      | 是 / 否 |
+| systemd 托管并开机自启                                 | 是 / 否 |
+| 配置文件 `nginx -t` 校验通过                            | 是 / 否 |
+| 内网监听端口为 `8088` / `8443`，未直接监听 `80/443`          | 是 / 否 |
+| 本机 firewalld 已开放 `8088` / `8443`，已删除旧的 `80/443` | 是 / 否 |
+| 外层防火墙 NAT 公网端口 → 内网 `8443` 已生效                  | 是 / 否 |
+| Vue history 路由刷新正常                              | 是 / 否 |
+| API 反向代理正常                                      | 是 / 否 |
+| `index.html` 未强缓存                               | 是 / 否 |
+| 静态资源长缓存策略符合预期                                   | 是 / 否 |
+| HTTPS 证书有效                                      | 是 / 否 |
+| 证书私钥权限为 `600`                                   | 是 / 否 |
+| `nginx_status` 未对外开放                            | 是 / 否 |
+| 日志正常写入并已配置切割                                    | 是 / 否 |
+| 防火墙规则符合最小开放原则                                   | 是 / 否 |
+| 后端端口未直接暴露公网                                     | 是 / 否 |
+| `default_server` 兜底已配置（裸 IP / 未知 Host 返回 444）   | 是 / 否 |
+| 全局 `limit_req` / `limit_conn` 已启用               | 是 / 否 |
+| `/api/` 路径限流已启用                                 | 是 / 否 |
+| 登录接口（`/api/auth/login` 等）加严限流已启用                | 是 / 否 |
+| 敏感路径屏蔽已生效（`.git`、`.env`、`.bak`、`.sql` 返回 404）   | 是 / 否 |
+| 已验证发布与回滚流程                                      | 是 / 否 |
 
 
