@@ -679,13 +679,15 @@ http {
     }
 
     # ---------- 公网入口基础防护：限流共享内存区 ----------
-    # 1) 全局 per-IP 限流：普通页面/静态资源
+    # 这里只"定义"共享内存区，不触发限流；真正生效由各业务 location
+    # 内的 limit_req / limit_conn 指令显式引用对应 zone。
+    # 1) per-IP 页面入口限流：用于 location / （SPA 入口/未匹配路径）
     limit_req_zone  $binary_remote_addr zone=perip_req:10m  rate=20r/s;
     # 2) /api/ 路径限流
     limit_req_zone  $binary_remote_addr zone=api_req:10m    rate=10r/s;
     # 3) 登录/敏感接口限流（防爆破）
     limit_req_zone  $binary_remote_addr zone=login_req:10m  rate=5r/m;
-    # 4) per-IP 并发连接数
+    # 4) per-IP 并发连接数（在 server 级引用，覆盖整站）
     limit_conn_zone $binary_remote_addr zone=perip_conn:10m;
     # 超限响应码：429 比默认的 503 更符合语义，监控告警识别更直观
     limit_req_status  429;
@@ -710,23 +712,85 @@ EOF
 | `open_file_cache`             | 缓存静态文件元信息，提高静态资源访问效率                   |
 | `log_format main`             | 增加 upstream 耗时，便于排查后端慢请求               |
 | `map $http_upgrade`           | 为 WebSocket 代理预留标准变量                   |
-| `limit_req_zone perip_req`    | 全局每 IP 限流共享内存区，20r/s                   |
+| `limit_req_zone perip_req`    | 页面入口限流共享内存区，20r/s（由 `location /` 引用）  |
 | `limit_req_zone api_req`      | `/api/` 路径限流共享内存区，10r/s                |
 | `limit_req_zone login_req`    | 登录接口限流共享内存区，5r/min（防爆破）                |
-| `limit_conn_zone perip_conn`  | 每 IP 并发连接数共享内存区                        |
+| `limit_conn_zone perip_conn`  | 每 IP 并发连接数共享内存区（由 server 级引用，覆盖整站）     |
 | `limit_req_status 429`        | 限流命中返回 `429 Too Many Requests`，监控告警更直观 |
 
 
 ### 10.4 公网入口防护配置说明
 
+#### 10.4.1 主配置与站点配置的协同关系
+
+本手册采用“**主配置统一定义限流/连接统计区，站点配置按路径显式引用**”的组织方式。配置人员需要先理解：**第 10.2 节写入的 `limit_req_zone`、`limit_conn_zone` 是后续所有业务站点限流配置的前置依赖**；第 11、12 章站点配置中的 `limit_req zone=...`、`limit_conn ...` 都不是孤立配置，必须依赖主配置中已经定义好的同名 zone。
+
+| 配置位置 | 指令 | 作用 | 是否直接限流 |
+| --- | --- | --- | --- |
+| `/data/module/nginx/conf/nginx.conf` 的 `http {}` | `limit_req_zone` | 定义请求频率限流共享内存区，例如 `perip_req`、`api_req`、`login_req` | 否 |
+| `/data/module/nginx/conf/nginx.conf` 的 `http {}` | `limit_conn_zone` | 定义并发连接数统计共享内存区，例如 `perip_conn` | 否 |
+| `/data/module/nginx/conf/conf.d/*.conf` 的 `server` / `location` | `limit_req` | 引用某个 `limit_req_zone`，对当前路径启用请求频率限流 | 是 |
+| `/data/module/nginx/conf/conf.d/*.conf` 的 `server` / `location` | `limit_conn` | 引用某个 `limit_conn_zone`，对当前范围启用并发连接数限制 | 是 |
+
+也就是说，主配置里的 `limit_req_zone` / `limit_conn_zone` 只是“先把规则池建好”，不会单独拦截任何请求；只有业务站点配置中写了 `limit_req` / `limit_conn`，引用对应 zone 后才真正生效。
+
+示例对应关系如下：
+
+```nginx
+# nginx.conf：定义请求限流共享内存区
+limit_req_zone  $binary_remote_addr zone=perip_req:10m  rate=20r/s;
+limit_req_zone  $binary_remote_addr zone=api_req:10m    rate=10r/s;
+limit_req_zone  $binary_remote_addr zone=login_req:10m  rate=5r/m;
+limit_conn_zone $binary_remote_addr zone=perip_conn:10m;
+
+# conf.d/业务站点.conf：按路径引用不同 zone
+server {
+    limit_conn perip_conn 200;
+
+    location = /api/auth/login {
+        limit_req zone=login_req burst=3 nodelay;
+        proxy_pass http://backend;
+    }
+
+    location /api/ {
+        limit_req zone=api_req burst=20 nodelay;
+        proxy_pass http://backend;
+    }
+
+    location / {
+        limit_req zone=perip_req burst=40 nodelay;
+        try_files $uri $uri/ /index.html;
+    }
+}
+```
+
+配置人员应按以下规则维护：
+
+1. **主配置只定义通用 zone**：所有业务站点共用的 `limit_req_zone`、`limit_conn_zone` 统一放在 `nginx.conf` 的 `http {}` 内；
+2. **站点配置只引用 zone**：`conf.d/*.conf` 中不要重复定义 `limit_req_zone` / `limit_conn_zone`，只在需要限流的 `server` 或 `location` 中引用；
+3. **不同路径引用不同策略**：页面入口用 `perip_req`，普通 API 用 `api_req`，登录等敏感接口用 `login_req`；
+4. **静态资源不引用 `limit_req`**：`.js`、`.css`、图片、字体等静态资源由静态资源 location 直接处理，不写 `limit_req`，避免 SPA 首屏资源并发加载时误触发 `429`；
+5. **连接数限制可以放在 server 级**：`limit_conn perip_conn 200` 限制的是同一 IP 的并发连接数，通常可以放在业务 `server` 级覆盖整站；
+6. **请求频率限制不要放在 server 级**：`limit_req` 放在 `server` 级会继承到静态资源等所有 location，容易误伤前端资源加载，应放到具体需要保护的 location 中。
+
+#### 10.4.2 限流策略说明
+
 主配置中的 `limit_req_zone`/`limit_conn_zone` 只是**定义共享内存区**，本身不触发限流。真正的限流由站点配置（第 11、12 章）中的 `limit_req`、`limit_conn` 指令引用共享内存区后生效。
+
+本手册采用 **"按 location 显式启用限流"** 的策略：
+
+- `limit_req` 不在 `server` 级声明，而是分别在 `location /`（页面入口/SPA fallback）、`location /api/`、`location = /api/auth/login` 内显式启用，引用对应 zone；
+- 静态资源 location（`*.js`、`*.css`、字体、图片等）**不写** `limit_req`，自然就不参与限流——SPA 首屏并发加载几十甚至上百个带 hash 的 chunk 与 assets 不会被误伤；
+- `limit_conn perip_conn` 在 `server` 级声明一次，覆盖全站，留出 HTTP/2 多路复用和图片并行下载所需空间。
+
+> 不要在某个 location 里写 `limit_req off;`：Nginx 没有这个语法，`nginx -t` 会直接报 `invalid parameter "off"`。如果要"关闭某个 location 的限流"，正确做法是在 `server` 级别不声明 `limit_req`，由具体需要限流的 location 自行声明。
 
 阈值选取原则：
 
-- **POC 与中小业务的宽松保守值**：全局 20r/s + burst 40，足以应对正常用户和扫描器混合流量，不会误伤业务；
+- **POC 与中小业务的宽松保守值**：页面入口 20r/s + burst 40，足以应对正常用户和扫描器混合流量，不会误伤业务；
 - `**/api/` 接口**：10r/s + burst 20，覆盖一般前端调用峰值；
 - `**/api/auth/login` 等登录类接口**：5 次/分钟，专门针对密码爆破和验证码穷举。正常用户登录一分钟内尝试不会超过 2-3 次；
-- **并发连接 `perip_conn 50`**：留出 keep-alive、HTTP/2 多路复用、图片资源并行下载所需空间。
+- **并发连接 `perip_conn 200`**：面向公网企业客户时，多个用户可能共用同一个公网出口 IP，200 能更好兼容 NAT 后的多人访问、keep-alive、HTTP/2 多路复用和 WebSocket 连接。
 
 阈值校准方法：
 
@@ -741,6 +805,8 @@ EOF
 - 大型 IP 黑名单或 GeoIP 国别封锁：除非业务明确只面向特定国家；
 - 复杂 User-Agent 黑名单：扫描器轮换 UA 成本极低，且容易误杀搜索引擎、监控、健康检查；
 - fail2ban 联动封禁：单体 + 低流量场景规则维护负担过重，公网映射端口本身已大幅降噪。
+
+> **静态资源长缓存头不要加 `always`**：Nginx 默认 `add_header` 只对 `200/201/204/206/301/302/303/304/307/308` 生效，错误响应（4xx/5xx）不会被打上响应头。如果给静态资源 `Cache-Control: public, max-age=2592000, immutable` 加了 `always`，那么万一限流（其他 location）或上游异常返回 4xx/5xx，错误响应也会被打上 30 天 immutable 缓存头，被浏览器/CDN 长期缓存，问题被永久放大。所以**静态资源的长缓存头不加 `always`**；其他需要在错误页也下发的安全响应头（如 `X-Content-Type-Options`、`X-Frame-Options`、`HSTS`）才用 `always`。
 
 ---
 
@@ -786,6 +852,8 @@ npm run build
 
 如果暂时没有 HTTPS 证书，可先使用 HTTP 配置完成基础部署验证。本节同时演示 `default_server` 兜底、限流、敏感路径屏蔽等公网入口必备防护，配置整体不长，但缺一不可。
 
+> **限流依赖说明**：本节站点配置中的 `limit_conn perip_conn 200`、`limit_req zone=login_req ...`、`limit_req zone=api_req ...`、`limit_req zone=perip_req ...` 都依赖第 10.2 节主配置 `nginx.conf` 中已经定义的 `limit_conn_zone` / `limit_req_zone`。如果未先写入主配置中的 zone 定义，`nginx -t` 会因找不到对应 zone 而失败。
+
 ```bash
 cat > /data/module/nginx/conf/conf.d/vue-app.conf << 'EOF'
 upstream vue_app_backend {
@@ -816,8 +884,7 @@ server {
     error_log  /data/module/nginx/logs/vue-app-error.log warn;
 
     # ---------- 基础防护 ----------
-    limit_conn perip_conn 50;
-    limit_req  zone=perip_req burst=40 nodelay;
+    limit_conn perip_conn 200;
 
     # 敏感路径屏蔽：拒绝访问 .git/.env/备份文件等
     location ~ /\.(git|svn|hg|env|DS_Store) { deny all; return 404; }
@@ -849,8 +916,11 @@ server {
     }
 
     location ~* \.(?:js|css|png|jpg|jpeg|gif|ico|svg|webp|woff|woff2|ttf|eot)$ {
+        # 静态资源不参与限流：server 级不声明 limit_req，本 location 也不声明，
+        # SPA 首屏并发加载的几十上百个 chunk 和 assets 不会被误伤 429。
+        # 同时不使用 always，避免错误响应被浏览器按 immutable 长缓存。
         expires 30d;
-        add_header Cache-Control "public, max-age=2592000, immutable" always;
+        add_header Cache-Control "public, max-age=2592000, immutable";
         try_files $uri =404;
     }
 
@@ -934,6 +1004,7 @@ server {
     }
 
     location / {
+        limit_req zone=perip_req burst=40 nodelay;
         try_files $uri $uri/ /index.html;
     }
 }
@@ -1033,6 +1104,8 @@ chmod 644 /data/module/nginx/conf/certs/dhparam.pem
 
 公网生产系统推荐 HTTP（内网监听端口 `8088`）仅用于跳转 HTTPS（内网监听端口 `8443`）。本节同步给出 `default_server` 兜底、限流、敏感路径屏蔽、登录接口加严等全部公网入口必备防护，**这是生产入口的最终形态**。
 
+> **限流依赖说明**：本节 HTTPS 业务入口中的 `limit_conn perip_conn 200`、`limit_req zone=login_req ...`、`limit_req zone=api_req ...`、`limit_req zone=perip_req ...` 都依赖第 10.2 节主配置 `nginx.conf` 中已经定义的 `limit_conn_zone` / `limit_req_zone`。站点配置只负责引用，不应在 `conf.d/*.conf` 中重复定义 zone。
+
 ```bash
 cat > /data/module/nginx/conf/conf.d/vue-app.conf << 'EOF'
 upstream vue_app_backend {
@@ -1100,8 +1173,7 @@ server {
     add_header X-XSS-Protection "1; mode=block" always;
 
     # ---------- 基础防护 ----------
-    limit_conn perip_conn 50;
-    limit_req  zone=perip_req burst=40 nodelay;
+    limit_conn perip_conn 200;
 
     # 敏感路径屏蔽：拒绝访问 .git/.env/备份文件等
     location ~ /\.(git|svn|hg|env|DS_Store) { deny all; return 404; }
@@ -1128,8 +1200,11 @@ server {
     }
 
     location ~* \.(?:js|css|png|jpg|jpeg|gif|ico|svg|webp|woff|woff2|ttf|eot)$ {
+        # 静态资源不参与限流：server 级不声明 limit_req，本 location 也不声明，
+        # SPA 首屏并发加载的几十上百个 chunk 和 assets 不会被误伤 429。
+        # 同时不使用 always，避免错误响应被浏览器按 immutable 长缓存。
         expires 30d;
-        add_header Cache-Control "public, max-age=2592000, immutable" always;
+        add_header Cache-Control "public, max-age=2592000, immutable";
         try_files $uri =404;
     }
 
@@ -1214,6 +1289,7 @@ server {
     }
 
     location / {
+        limit_req zone=perip_req burst=40 nodelay;
         try_files $uri $uri/ /index.html;
     }
 }
@@ -1231,8 +1307,8 @@ EOF
 | `ssl_session_cache`                         | 启用 TLS 会话缓存，减少握手开销                           |
 | `ssl_session_tickets off`                   | 降低会话票据密钥管理风险                                 |
 | `Strict-Transport-Security`                 | 强制浏览器后续使用 HTTPS，公网确认 HTTPS 稳定后再启用            |
-| `limit_conn perip_conn 50`                  | 单 IP 并发连接上限 50，留出 HTTP/2 多路复用和图片并行下载所需空间     |
-| `limit_req zone=perip_req burst=40 nodelay` | 全局每 IP 限流 20r/s，瞬时突发 40 个                    |
+| `limit_conn perip_conn 200`                  | 单 IP 并发连接上限 200，兼容公网企业客户同出口 NAT、HTTP/2 多路复用和 WebSocket 连接 |
+| `limit_req zone=perip_req burst=40 nodelay` | 页面入口限流 20r/s，瞬时突发 40 个（在 `location /` 内生效）  |
 | `limit_req zone=api_req burst=20 nodelay`   | `/api/` 限流 10r/s，瞬时突发 20 个                   |
 | `limit_req zone=login_req burst=3 nodelay`  | `/api/auth/login` 限流 5r/min，专门防密码爆破          |
 | 敏感路径屏蔽                                      | `.git`、`.env`、`.bak`、`.sql` 等扫描器最常探测路径直接 404 |
@@ -1953,107 +2029,3 @@ openssl s_client -connect 127.0.0.1:8443 -servername example.com </dev/null \
 ```
 
 输出中 `Subject Alternative Name` 字段会列出证书绑定的域名/IP 范围。
-
----
-
-## 附录 A：最小 HTTP Vue 配置模板
-
-适用于内网、测试、预生产或暂未启用 HTTPS 的环境。已包含 `default_server` 兜底和基础限流，**不要在公网环境直接使用此模板（缺少 HTTPS）**。
-
-```nginx
-server {
-    listen 8088 default_server;
-    server_name _;
-    return 444;
-}
-
-server {
-    listen 8088;
-    server_name example.com <公网IP> <内网IP>;
-    # ↑ 同时允许域名访问和裸 IP 访问，按现场实际 IP 替换占位符
-
-    root /data/soft/www/vue-app/current;
-    index index.html;
-
-    limit_conn perip_conn 50;
-    limit_req  zone=perip_req burst=40 nodelay;
-
-    location ~ /\.(git|svn|hg|env|DS_Store) { deny all; return 404; }
-    location ~* \.(bak|sql|swp|old|orig|save|log)$ { deny all; return 404; }
-
-    location = /index.html {
-        add_header Cache-Control "no-cache, no-store, must-revalidate" always;
-        try_files $uri =404;
-    }
-
-    location ~* \.(?:js|css|png|jpg|jpeg|gif|ico|svg|webp|woff|woff2|ttf|eot)$ {
-        expires 30d;
-        add_header Cache-Control "public, max-age=2592000, immutable" always;
-        try_files $uri =404;
-    }
-
-    location /api/ {
-        rewrite ^/api/(.*)$ /$1 break;
-        limit_req zone=api_req burst=20 nodelay;
-
-        proxy_pass http://127.0.0.1:8080;
-        proxy_http_version 1.1;
-
-        proxy_set_header Connection "";
-        proxy_set_header Host $host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
-        proxy_set_header X-Forwarded-Proto $scheme;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port $server_port;
-
-        proxy_connect_timeout 5s;
-        proxy_send_timeout 60s;
-        proxy_read_timeout 60s;
-
-        proxy_buffering on;
-        proxy_buffer_size 16k;
-        proxy_buffers 8 64k;
-        proxy_busy_buffers_size 128k;
-
-        proxy_next_upstream error timeout http_502 http_503 http_504;
-        proxy_next_upstream_tries 2;
-    }
-
-    location / {
-        try_files $uri $uri/ /index.html;
-    }
-}
-```
-
----
-
-## 附录 B：最终生产上线确认表
-
-
-| 检查项                                             | 是否完成  |
-| ----------------------------------------------- | ----- |
-| Nginx 使用非 root 用户运行 worker                      | 是 / 否 |
-| systemd 托管并开机自启                                 | 是 / 否 |
-| 配置文件 `nginx -t` 校验通过                            | 是 / 否 |
-| 内网监听端口为 `8088` / `8443`，未直接监听 `80/443`          | 是 / 否 |
-| 本机 firewalld 已开放 `8088` / `8443`，已删除旧的 `80/443` | 是 / 否 |
-| 外层防火墙 NAT 公网端口 → 内网 `8443` 已生效                  | 是 / 否 |
-| Vue history 路由刷新正常                              | 是 / 否 |
-| API 反向代理正常                                      | 是 / 否 |
-| `index.html` 未强缓存                               | 是 / 否 |
-| 静态资源长缓存策略符合预期                                   | 是 / 否 |
-| HTTPS 证书有效                                      | 是 / 否 |
-| 证书私钥权限为 `600`                                   | 是 / 否 |
-| `nginx_status` 未对外开放                            | 是 / 否 |
-| 日志正常写入并已配置切割                                    | 是 / 否 |
-| 防火墙规则符合最小开放原则                                   | 是 / 否 |
-| 后端端口未直接暴露公网                                     | 是 / 否 |
-| `default_server` 兜底已配置（裸 IP / 未知 Host 返回 444）   | 是 / 否 |
-| 全局 `limit_req` / `limit_conn` 已启用               | 是 / 否 |
-| `/api/` 路径限流已启用                                 | 是 / 否 |
-| 登录接口（`/api/auth/login` 等）加严限流已启用                | 是 / 否 |
-| 敏感路径屏蔽已生效（`.git`、`.env`、`.bak`、`.sql` 返回 404）   | 是 / 否 |
-| 已验证发布与回滚流程                                      | 是 / 否 |
-
-
