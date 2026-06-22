@@ -272,7 +272,7 @@ replica-lazy-flush yes
 
 ```acl
 user default off
-user app on >ReplaceWith_App_StrongPassword_2026 ~* +@read +@write +@connection +@transaction +@scripting -@admin -@dangerous -keys -flushdb -flushall
+user app on >ReplaceWith_App_StrongPassword_2026 ~* +@read +@write +@connection +@transaction +@scripting +info -@admin -@dangerous -keys -flushdb -flushall
 user monitor on >ReplaceWith_Monitor_StrongPassword_2026 ~* +ping +info +slowlog +client|getname +client|id +client|list +config|get +cluster|info +cluster|nodes +cluster|slots
 user replica on >ReplaceWith_Replica_StrongPassword_2026 ~* +psync +replconf +ping
 user clusteradmin on >ReplaceWith_ClusterAdmin_StrongPassword_2026 ~* +@all

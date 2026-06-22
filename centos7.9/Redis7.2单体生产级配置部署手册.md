@@ -960,7 +960,7 @@ Redis ACL 文件支持两种密码写法：
 cat > /data/module/redis7.2/conf/users.acl << 'EOF'
 user default off
 user admin on >wyz123!@# ~* &* +@all
-user app on >wyz123!@# ~* &* +@all -@admin -@dangerous -acl -config -shutdown -debug -module -flushdb -flushall -keys -monitor -save -bgsave -bgrewriteaof
+user app on >wyz123!@# ~* &* +@all -@admin -@dangerous -acl -config -shutdown -debug -module -flushdb -flushall -keys -monitor -save -bgsave -bgrewriteaof +info
 user monitor on >wyz123!@# ~* +ping +info +slowlog +client|getname +client|id +client|list +config|get
 EOF
 ```
@@ -972,7 +972,7 @@ chown root:redis /data/module/redis7.2/conf/users.acl
 chmod 640 /data/module/redis7.2/conf/users.acl
 ```
 
-`admin` 用户拥有最高权限，仅用于受控运维操作，不应配置到业务应用。`app` 用户是业务应用通用账号，采用最大化兼容策略：先授予 `+@all`，再移除管理类和高危命令，默认覆盖 Java/Spring/Lettuce/Redisson 常见业务能力，包括普通读写、事务、Lua 脚本、Pub/Sub、Stream、GEO、Bitmap、HyperLogLog 等。`~*` 表示允许访问所有 key，`&*` 表示允许访问所有 Pub/Sub channel。该账号不授予 ACL 管理、配置修改、停服、调试、模块加载、清库、全量遍历、监控连接抓取和手工持久化触发等能力。
+`admin` 用户拥有最高权限，仅用于受控运维操作，不应配置到业务应用。`app` 用户是业务应用通用账号，采用最大化兼容策略：先授予 `+@all`，再移除管理类和高危命令，并显式保留 `+info`，默认覆盖 Java/Spring/Lettuce/Redisson 常见业务能力，包括普通读写、事务、Lua 脚本、Pub/Sub、Stream、GEO、Bitmap、HyperLogLog、客户端初始化和健康检查等。`~*` 表示允许访问所有 key，`&*` 表示允许访问所有 Pub/Sub channel。该账号不授予 ACL 管理、配置修改、停服、调试、模块加载、清库、全量遍历、监控连接抓取和手工持久化触发等能力。
 
 注意：`>password` 是 ACL 文件中的密码语法。如果通过 shell 执行 `ACL SETUSER`，必须给 `>password` 加引号，否则会被 shell 解释为输出重定向。
 
@@ -1002,7 +1002,7 @@ printf 'monitor hash: %s\n' "$REDIS_MONITOR_PASSWORD_HASH"
 cat > /data/module/redis7.2/conf/users.acl << EOF
 user default off
 user admin on #${REDIS_ADMIN_PASSWORD_HASH} ~* &* +@all
-user app on #${REDIS_APP_PASSWORD_HASH} ~* &* +@all -@admin -@dangerous -acl -config -shutdown -debug -module -flushdb -flushall -keys -monitor -save -bgsave -bgrewriteaof
+user app on #${REDIS_APP_PASSWORD_HASH} ~* &* +@all -@admin -@dangerous -acl -config -shutdown -debug -module -flushdb -flushall -keys -monitor -save -bgsave -bgrewriteaof +info
 user monitor on #${REDIS_MONITOR_PASSWORD_HASH} ~* +ping +info +slowlog +client|getname +client|id +client|list +config|get
 EOF
 ```
