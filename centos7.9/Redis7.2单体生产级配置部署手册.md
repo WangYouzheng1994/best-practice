@@ -1129,6 +1129,81 @@ redis-cli -h 127.0.0.1 -p 16379 ping
 unset REDISCLI_AUTH
 ```
 
+### 11.4 修改 ACL 用户或规则后的生效方式
+
+第 11.3 节针对的是**切换认证方案**（ACL 与 `requirepass` 之间切换）这类需要重启的变更。如果只是新增、修改或删除 ACL 用户和权限规则，不需要重启 Redis，推荐使用热加载，对在线业务零中断。
+
+前提：`redis-production.conf` 中已配置 `aclfile /data/module/redis7.2/conf/users.acl`（方案 A 默认满足）。
+
+#### 11.4.1 方式一：修改文件后 `ACL LOAD` 热加载（推荐）
+
+适用于"先编辑 `users.acl` 文件、再让改动生效"的标准工作流。
+
+先编辑 ACL 文件：
+
+```bash
+vim /data/module/redis7.2/conf/users.acl
+```
+
+执行热加载：
+
+```bash
+export REDISCLI_AUTH='wyz123!@#'
+redis-cli -h 127.0.0.1 -p 16379 --user admin ACL LOAD
+unset REDISCLI_AUTH
+```
+
+返回 `OK` 即生效。说明：
+
+- `ACL LOAD` 用文件内容**整体替换**当前内存中的全部 ACL 规则，是原子操作，要么全部成功要么全部失败；
+- 如果文件存在语法错误，命令会返回报错且**不改变**当前规则，现网业务不受影响；
+- 已建立并完成认证的旧连接保持原会话权限，权限变更对该用户**之后新发起的连接**生效；
+- 必须使用具备 ACL 管理权限的用户（如 `admin`）执行，`app`、`monitor` 没有 `+acl` 权限无法执行。
+
+加载后验证：
+
+```bash
+export REDISCLI_AUTH='wyz123!@#'
+redis-cli -h 127.0.0.1 -p 16379 --user admin ACL LIST
+redis-cli -h 127.0.0.1 -p 16379 --user admin ACL GETUSER app
+unset REDISCLI_AUTH
+```
+
+#### 11.4.2 方式二：在线 `ACL SETUSER` 调整后 `ACL SAVE` 落盘
+
+适用于临时、单点调整某个用户权限的场景：先在运行时改规则，确认无误后写回 ACL 文件持久化。
+
+在线修改用户（以给 `app` 临时增加权限为例）：
+
+```bash
+export REDISCLI_AUTH='wyz123!@#'
+redis-cli -h 127.0.0.1 -p 16379 --user admin ACL SETUSER app on '>wyz123!@#' '~*' '&*' +@all -@admin -@dangerous
+unset REDISCLI_AUTH
+```
+
+确认规则符合预期后落盘：
+
+```bash
+export REDISCLI_AUTH='wyz123!@#'
+redis-cli -h 127.0.0.1 -p 16379 --user admin ACL SAVE
+unset REDISCLI_AUTH
+```
+
+注意：
+
+- 通过 shell 传入 `>password`、`~*`、`&*` 等参数时必须加引号，否则 `>` 会被 shell 解释为输出重定向，`*` 会被解释为文件名通配；
+- `ACL SETUSER` 对同一用户是**增量修改**而非整体替换，不确定当前规则时应先用 `ACL GETUSER` 查看；
+- `ACL SAVE` 会用当前内存中的全部 ACL 规则**覆盖** `users.acl` 文件，与"先手工编辑文件"的工作流方向相反；若此前手工改过文件但未 `ACL LOAD`，执行 `ACL SAVE` 会丢失这些手工改动，使用前需确认文件内容已是最新；
+- 该方式适合临时、小范围调整，规范化的批量变更仍推荐方式一。
+
+#### 11.4.3 两种方式的选择
+
+| 方式 | 工作流 | 是否重启 | 适用场景 |
+|---|---|---|---|
+| 方式一 `ACL LOAD` | 先改文件，再热加载 | 否 | 推荐，规范化变更、批量调整 |
+| 方式二 `ACL SETUSER` + `ACL SAVE` | 先在线改，再落盘 | 否 | 临时、单用户快速调整 |
+| `systemctl restart`（见 11.3） | 改配置后重启 | 是 | 切换认证方案或同时修改了需重启的配置 |
+
 ---
 
 ## 12. systemd 服务配置
