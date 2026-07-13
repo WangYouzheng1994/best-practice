@@ -222,26 +222,20 @@ ls -ld /data/module/tdengine /data/module/tdengine/data /data/backup/tdengine
 
 ## 6. 下载并校验安装包
 
-进入制品目录：
+生产环境推荐从企业制品库上传到上述安装包路径。如果当前服务器允许访问官方 CDN，可以执行：
 
 ```bash
-cd /data/module/tdengine/3.4.1.13
-```
-
-生产环境推荐从企业制品库上传到该目录。如果当前服务器允许访问官方 CDN，可以执行：
-
-```bash
-wget -O tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz \
+wget -O /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz \
   https://downloads.taosdata.com/tdengine-tsdb-oss/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz
 ```
 
 校验文件：
 
 ```bash
-test "$(stat -c '%s' tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz)" -eq 300274656
-echo '4c0fc6e31d59107a5125d5284fc58c32  tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz' | md5sum -c -
-echo '1b8cba22f1ea510ec72863041413ad86970ece2501d15c6eff482db189add515  tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz' | sha256sum -c -
-gzip -t tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz
+test "$(stat -c '%s' /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz)" -eq 300274656
+echo '4c0fc6e31d59107a5125d5284fc58c32  /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz' | md5sum -c -
+echo '1b8cba22f1ea510ec72863041413ad86970ece2501d15c6eff482db189add515  /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz' | sha256sum -c -
+gzip -t /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz
 ```
 
 MD5、SHA256 必须显示 `OK`，`gzip -t` 必须没有错误输出。
@@ -255,10 +249,11 @@ MD5、SHA256 必须显示 `OK`，`gzip -t` 必须没有错误输出。
 ### 7.1 解压
 
 ```bash
-cd /data/module/tdengine/3.4.1.13
-tar -zxf tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz -C install
-cd install/tdengine-tsdb-oss-3.4.1.13
-ls -lh install.sh package.tar.gz
+tar -zxf /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz \
+  -C /data/module/tdengine/3.4.1.13/install
+ls -lh \
+  /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13/install.sh \
+  /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13/package.tar.gz
 ```
 
 内层 `package.tar.gz` 由 `install.sh` 自动处理，不要手工解压。
@@ -266,7 +261,8 @@ ls -lh install.sh package.tar.gz
 ### 7.2 安装
 
 ```bash
-./install.sh \
+cd /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13
+/data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13/install.sh \
   -v server \
   -e no \
   -d /data/module/tdengine/3.4.1.13
@@ -657,10 +653,10 @@ SHOW DATABASES;
 ### 14.1 执行一次全量备份
 
 ```bash
-BACKUP_DIR="/data/backup/tdengine/$(date +%F_%H%M%S)"
+BACKUP_TIME="$(date +%F_%H%M%S)"
 
-mkdir -p "$BACKUP_DIR"
-chmod 0750 "$BACKUP_DIR"
+mkdir -p "/data/backup/tdengine/$BACKUP_TIME"
+chmod 0750 "/data/backup/tdengine/$BACKUP_TIME"
 
 taosdump \
   -h 127.0.0.1 \
@@ -670,19 +666,20 @@ taosdump \
   -A \
   -d snappy \
   -T 8 \
-  -o "$BACKUP_DIR"
+  -o "/data/backup/tdengine/$BACKUP_TIME"
 ```
 
 生成校验文件：
 
 ```bash
-(cd "$BACKUP_DIR" && \
-  find . -type f ! -name SHA256SUMS -print0 \
-    | sort -z \
-    | xargs -0 sha256sum > SHA256SUMS)
+find "/data/backup/tdengine/$BACKUP_TIME" -type f ! -name SHA256SUMS -printf '%P\0' \
+  | sort -z \
+  | (cd "/data/backup/tdengine/$BACKUP_TIME" && xargs -0 sha256sum) \
+  > "/data/backup/tdengine/$BACKUP_TIME/SHA256SUMS"
 
-du -sh "$BACKUP_DIR"
-(cd "$BACKUP_DIR" && sha256sum -c SHA256SUMS)
+du -sh "/data/backup/tdengine/$BACKUP_TIME"
+(cd "/data/backup/tdengine/$BACKUP_TIME" && \
+  sha256sum -c "/data/backup/tdengine/$BACKUP_TIME/SHA256SUMS")
 ```
 
 备份完成后，必须把整个备份目录复制到另一台主机或独立备份存储。`SHA256SUMS` 使用相对路径，复制后仍可校验。
@@ -694,8 +691,8 @@ du -sh "$BACKUP_DIR"
 优先恢复到独立测试实例。下面以原库 `prod_iot`、恢复库 `restore_drill_20260713`、备份目录 `/data/backup/tdengine/2026-07-13_150000` 为例，执行前替换成实际值：
 
 ```bash
-cd /data/backup/tdengine/2026-07-13_150000
-sha256sum -c SHA256SUMS
+(cd /data/backup/tdengine/2026-07-13_150000 && \
+  sha256sum -c /data/backup/tdengine/2026-07-13_150000/SHA256SUMS)
 
 taosdump \
   -i /data/backup/tdengine/2026-07-13_150000 \
@@ -905,7 +902,8 @@ mkdir -p /data/module/tdengine/3.4.x.y/install
 tar -zxf /data/module/tdengine/3.4.x.y/tdengine-tsdb-oss-3.4.x.y-linux-x64.tar.gz \
   -C /data/module/tdengine/3.4.x.y/install
 cd /data/module/tdengine/3.4.x.y/install/tdengine-tsdb-oss-3.4.x.y
-./install.sh -v server -e no -d /data/module/tdengine/3.4.x.y
+/data/module/tdengine/3.4.x.y/install/tdengine-tsdb-oss-3.4.x.y/install.sh \
+  -v server -e no -d /data/module/tdengine/3.4.x.y
 
 # 恢复生产安全基线
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
@@ -940,7 +938,8 @@ taosd -V
 systemctl stop taoskeeper taosadapter taosd
 
 cd /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13
-./install.sh -v server -e no -d /data/module/tdengine/3.4.1.13
+/data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13/install.sh \
+  -v server -e no -d /data/module/tdengine/3.4.1.13
 
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
 systemctl disable taos-explorer
@@ -969,12 +968,12 @@ taosd -V
 如制品库同时归档 RPM，仅执行以下校验，不套用到本文安装流程：
 
 ```bash
-echo 'e1ad92cbdcc3d459243e3311e7b259e4  tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm' | md5sum -c -
-sha256sum tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
-rpm -Kv tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
-rpm -qp --qf 'NAME=%{NAME}\nVERSION=%{VERSION}\nRELEASE=%{RELEASE}\nARCH=%{ARCH}\n' tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
-rpm -qpR tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
-rpm -qlp tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm | less
+echo 'e1ad92cbdcc3d459243e3311e7b259e4  /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm' | md5sum -c -
+sha256sum /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
+rpm -Kv /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
+rpm -qp --qf 'NAME=%{NAME}\nVERSION=%{VERSION}\nRELEASE=%{RELEASE}\nARCH=%{ARCH}\n' /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
+rpm -qpR /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
+rpm -qlp /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm | less
 ```
 
 禁止使用 `rpm --nodeps` 强行安装。
