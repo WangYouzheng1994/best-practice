@@ -189,13 +189,13 @@ TDengine 初始化完成后，不要直接修改 hostname 或 `fqdn`。
 ## 5. 创建目录
 
 ```bash
-mkdir -p /data/soft/tdengine/3.4.1.13
+mkdir -p /data/soft
 mkdir -p /data/module/tdengine-3.4.1.13
 mkdir -p /data/tdengine/{data,log/taosd,log/adapter,log/keeper,tmp}
 mkdir -p /backup/tdengine
 
-chown -R root:root /data/soft/tdengine /data/module/tdengine-3.4.1.13 /data/tdengine /backup/tdengine
-chmod 0755 /data/soft/tdengine /data/soft/tdengine/3.4.1.13 /data/module/tdengine-3.4.1.13
+chown -R root:root /data/module/tdengine-3.4.1.13 /data/tdengine /backup/tdengine
+chmod 0755 /data/soft /data/module/tdengine-3.4.1.13
 chmod 0750 /data/tdengine /data/tdengine/data /data/tdengine/log /data/tdengine/log/* /data/tdengine/tmp /backup/tdengine
 
 df -hT /data /backup
@@ -206,7 +206,7 @@ ls -ld /data /data/tdengine /data/tdengine/data /backup /backup/tdengine
 
 | 路径 | 用途 |
 |---|---|
-| `/data/soft/tdengine/3.4.1.13` | 安装包和解压目录 |
+| `/data/soft` | 安装包和解压目录 |
 | `/data/module/tdengine-3.4.1.13/taos` | 程序版本目录 |
 | `/data/module/tdengine` | 当前版本软链接 |
 | `/data/tdengine/data` | 数据和 WAL |
@@ -223,7 +223,7 @@ ls -ld /data /data/tdengine /data/tdengine/data /backup /backup/tdengine
 进入制品目录：
 
 ```bash
-cd /data/soft/tdengine/3.4.1.13
+cd /data/soft
 ```
 
 生产环境推荐从企业制品库上传到该目录。如果当前服务器允许访问官方 CDN，可以执行：
@@ -253,7 +253,7 @@ MD5、SHA256 必须显示 `OK`，`gzip -t` 必须没有错误输出。
 ### 7.1 解压
 
 ```bash
-cd /data/soft/tdengine/3.4.1.13
+cd /data/soft
 tar -zxf tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz
 cd tdengine-tsdb-oss-3.4.1.13
 ls -lh install.sh package.tar.gz
@@ -899,7 +899,7 @@ SHOW STABLES;
 systemctl stop taoskeeper taosadapter taosd
 
 # 解压已校验的新包后进入其目录
-cd /data/soft/tdengine/3.4.x.y/tdengine-tsdb-oss-3.4.x.y
+cd /data/soft/tdengine-tsdb-oss-3.4.x.y
 mkdir -p /data/module/tdengine-3.4.x.y
 ./install.sh -v server -e no -d /data/module/tdengine-3.4.x.y
 
@@ -935,7 +935,7 @@ taosd -V
 ```bash
 systemctl stop taoskeeper taosadapter taosd
 
-cd /data/soft/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13
+cd /data/soft/tdengine-tsdb-oss-3.4.1.13
 ./install.sh -v server -e no -d /data/module/tdengine-3.4.1.13
 
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
