@@ -50,14 +50,10 @@ sudo -i
 ```bash
 cat /etc/redhat-release
 uname -m
-hostnamectl
-lscpu
+nproc
 free -h
-lsblk -o NAME,SIZE,ROTA,TYPE,FSTYPE,MOUNTPOINT
-df -hT
-timedatectl
+df -hT /data
 chronyc tracking
-ulimit -n
 ```
 
 继续部署前必须满足：
@@ -67,13 +63,15 @@ ulimit -n
 - `/data` 是已确认的数据盘；
 - 推荐生产起步规格为 16C/64G；
 - 数据盘按容量评审准备，并至少保留 30% 空闲空间；
-- 已执行《CentOS7.9生产环境初始化手册.md》中的 Swap、THP、文件句柄和磁盘基线。
+- 已完成《CentOS7.9生产环境初始化手册.md》的全部公共基线。
 
-安装本文使用的基础命令；CentOS Yum 源应已由初始化手册配置完成：
+确认初始化手册已经安装本文需要的基础命令：
 
 ```bash
-yum install -y vim-enhanced wget openssl curl sysstat
+command -v vim wget openssl curl iostat
 ```
+
+预期依次输出五个命令路径，不得缺少任何一行。
 
 ### 2.2 检查历史 TDengine
 
@@ -190,21 +188,20 @@ TDengine 初始化完成后，不要直接修改 hostname 或 `fqdn`。
 ## 5. 创建目录
 
 ```bash
-mkdir -p /data/module
 mkdir -p /data/module/tdengine/3.4.1.13/install
 mkdir -p /data/module/tdengine/{data,logs/taosd,logs/adapter,logs/keeper,tmp}
 mkdir -p /data/backup/tdengine
 
 chown -R root:root /data/module/tdengine /data/backup/tdengine
-chmod 0755 /data/module /data/module/tdengine /data/module/tdengine/3.4.1.13 /data/module/tdengine/3.4.1.13/install
+chmod 0755 /data/module/tdengine /data/module/tdengine/3.4.1.13 /data/module/tdengine/3.4.1.13/install
 chmod 0750 /data/module/tdengine/data /data/module/tdengine/logs /data/module/tdengine/logs/* /data/module/tdengine/tmp /data/backup/tdengine
 
-df -hT /data
-ls -ld /data/{backup,module,soft,source}
 ls -ld \
   /data/module/tdengine \
   /data/module/tdengine/3.4.1.13/install \
   /data/module/tdengine/data \
+  /data/module/tdengine/logs \
+  /data/module/tdengine/tmp \
   /data/backup/tdengine
 ```
 
@@ -373,7 +370,7 @@ systemctl is-active taosd taosadapter taoskeeper || true
 
 ### 7.5 配置环境变量
 
-和 MySQL、Redis、JDK 手册保持一致，TDengine 使用当前版本软链接配置统一环境变量。
+按 CentOS 初始化手册的公共约定，TDengine 只向 `/etc/profile.d/myenv.sh` 追加自己的环境变量。
 
 编辑团队环境变量文件；如果已经存在其他软件变量，只追加 TDengine 内容，不得覆盖整个文件：
 
@@ -392,18 +389,20 @@ export PATH=$TDENGINE_HOME/bin:$PATH
 保存并加载：
 
 ```bash
-chown root:root /etc/profile.d/myenv.sh
-chmod 0644 /etc/profile.d/myenv.sh
 source /etc/profile.d/myenv.sh
 
 echo "$TDENGINE_HOME"
 which taos taosd taosdump
-readlink -f "$(command -v taosd)"
-taos -V
-taosd -V
 ```
 
-预期 `which` 指向 `/data/module/tdengine/current/bin/`，`readlink -f` 最终指向当前带版本目录。
+预期：
+
+```text
+/data/module/tdengine/current
+/data/module/tdengine/current/bin/taos
+/data/module/tdengine/current/bin/taosd
+/data/module/tdengine/current/bin/taosdump
+```
 
 systemd 使用绝对 `ExecStart`，不依赖交互式 Shell 环境变量。
 
@@ -1026,26 +1025,7 @@ taosd -V
 
 ---
 
-## 19. 安装结论和 RPM 制品校验
-
-本文固定使用官方 Linux-Generic x64 压缩包，不使用 RPM 或 Docker 安装。
-
-如制品库同时归档 RPM，仅执行以下校验，不套用到本文安装流程：
-
-```bash
-echo 'e1ad92cbdcc3d459243e3311e7b259e4  /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm' | md5sum -c -
-sha256sum /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
-rpm -Kv /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
-rpm -qp --qf 'NAME=%{NAME}\nVERSION=%{VERSION}\nRELEASE=%{RELEASE}\nARCH=%{ARCH}\n' /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
-rpm -qpR /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
-rpm -qlp /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm | less
-```
-
-禁止使用 `rpm --nodeps` 强行安装。
-
----
-
-## 20. 风险说明
+## 19. 风险说明
 
 | 风险 | 控制措施 |
 |---|---|
@@ -1065,7 +1045,7 @@ rpm -qlp /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
 
 ---
 
-## 21. 官方参考资料
+## 20. 官方参考资料
 
 以下资料于 2026-07-13 重新核验：
 
