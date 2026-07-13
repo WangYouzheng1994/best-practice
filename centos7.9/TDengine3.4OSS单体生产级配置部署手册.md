@@ -154,19 +154,78 @@ ulimit -n
 
 ### 3.3 FQDN 和地址解析
 
-单体也必须固定 FQDN。示例：
+单体也必须固定节点名称并保证名称解析稳定。先检查现状，不要无条件修改 hostname：
+
+```bash
+printf 'hostname=<%s>\n' "$(hostname)"
+printf 'hostname-f=<%s>\n' "$(hostname -f)"
+printf 'static=<%s>\n' "$(hostnamectl --static)"
+getent ahostsv4 "$(hostname)"
+grep -nF "$(hostname)" /etc/hosts || true
+grep -nE '127\.0\.0\.1|127\.0\.1\.1|::1' /etc/hosts
+```
+
+名称规划有三种方案：
+
+| 方案 | 说明 | 结论 |
+|---|---|---|
+| 方案 A：保留现有短主机名 | 名称唯一，并通过内网 DNS 或 `/etc/hosts` 解析到本机内网 IP | **现有单体主机名合格时推荐** |
+| 方案 B：使用企业完整 FQDN | 如 `prod-tsdb-01.example.internal`，由企业内网 DNS 统一解析 | 正式生产且已有 DNS 管理时最佳 |
+| 方案 C：直接使用 IP 作为节点标识 | 不依赖名称解析 | 迁移和地址变更困难，不推荐 |
+
+只有现有静态 hostname 不符合命名规范时，才在 TDengine 首次初始化前调整：
 
 ```bash
 hostnamectl set-hostname prod-tsdb-01
+hostnamectl --static
+```
 
-# 按现场 IP 修改；不要把业务 FQDN 解析到 127.0.0.1
-echo '<TDENGINE_INNER_IP> prod-tsdb-01' >> /etc/hosts
+没有企业内网 DNS，或需要本机静态兜底时，先备份再人工合并 `/etc/hosts`。不要使用 `echo >>` 直接追加，以免重复执行后产生重复或冲突记录：
 
+```bash
+cp -a /etc/hosts "/etc/hosts.$(date +%F_%H%M%S).bak"
+vim /etc/hosts
+```
+
+无企业域名时写入一条明确映射：
+
+```text
+<TDENGINE_INNER_IP> prod-tsdb-01
+```
+
+已有企业内网域名时，完整 FQDN 放在同一行第一个名称位置，短主机名作为别名：
+
+```text
+<TDENGINE_INNER_IP> prod-tsdb-01.example.internal prod-tsdb-01
+```
+
+保存后验证；`getent` 是名称解析的主要验收依据，`ping` 只在现场允许 ICMP 时辅助使用：
+
+```bash
+hostname
+hostname -f
+getent ahostsv4 prod-tsdb-01
 getent hosts prod-tsdb-01
+
+# 可选：现场允许 ICMP 时执行
 ping -c 3 prod-tsdb-01
 ```
 
-`fqdn` 是 TDengine 节点身份的一部分。实例初始化后禁止直接修改主机名、FQDN 或数据目录并期待原数据自动适配。
+验收要求：
+
+- `hostname` 与 `hostnamectl --static` 一致；
+- 输出不包含多余点号、空格或不可见字符；
+- 节点名称解析到本机真实内网 IP，不得解析到 `127.0.0.1`、`127.0.1.1` 或公网 IP；
+- 使用 Native 连接的远程客户端也必须能够解析配置中的同一个 `fqdn`；
+- `fqdn` 与 `firstEp` 使用完全一致的名称，例如：
+
+```ini
+fqdn       prod-tsdb-01
+firstEp    prod-tsdb-01:6030
+serverPort 6030
+```
+
+`fqdn` 是 TDengine 节点身份的一部分。实例初始化后禁止直接修改主机名、FQDN 或数据目录并期待原数据自动适配；确需变更时必须单独制定迁移和回滚方案。
 
 ### 3.4 历史实例排查
 
