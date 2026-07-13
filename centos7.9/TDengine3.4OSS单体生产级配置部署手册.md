@@ -594,7 +594,56 @@ ls -ld \
 
 预期 systemd 的 `ExecStart` 指向 `/data/module/tdengine-3.4.1.13/taos/bin/` 下的对应程序，并通过 `-c` 指向 `/etc/taos` 中的配置。此时服务应为 enabled，但在本文显式启动前应保持 inactive。
 
-### 8.4 收敛安装脚本产生的路径和权限
+### 8.4 配置环境变量
+
+Generic 安装器已经在 `/usr/bin` 创建 `taos`、`taosd`、`taosdump` 等软链接，systemd unit 也使用带版本程序目录的绝对路径。环境变量有三种处理方案：
+
+| 方案 | 说明 | 结论 |
+|---|---|---|
+| 方案 A：使用安装器生成的 `/usr/bin` 入口 | 不重复修改全局 `PATH`，通过 `readlink` 核验实际版本 | **推荐，系统改动最少** |
+| 方案 B：配置 `TDENGINE_HOME` | 运维脚本可统一引用 `/data/module/tdengine` | 有明确脚本需求时使用 |
+| 方案 C：单独创建 `/etc/profile.d/tdengine.sh` | 软件各自维护环境文件 | 不符合团队统一规范，禁止使用 |
+
+推荐方案 A，验证如下：
+
+```bash
+which taos taosd taosdump
+readlink -f "$(command -v taos)"
+readlink -f "$(command -v taosd)"
+taos -V
+taosd -V
+```
+
+如果运维脚本确实需要 `TDENGINE_HOME`，编辑统一文件，不得覆盖其中已有的 Java、MySQL、Redis 等变量：
+
+```bash
+vim /etc/profile.d/myenv.sh
+```
+
+追加：
+
+```bash
+# TDENGINE_HOME：TDengine 当前版本稳定软链接
+export TDENGINE_HOME=/data/module/tdengine
+export PATH=$TDENGINE_HOME/bin:$PATH
+```
+
+保存并验证：
+
+```bash
+chown root:root /etc/profile.d/myenv.sh
+chmod 0644 /etc/profile.d/myenv.sh
+source /etc/profile.d/myenv.sh
+
+echo "$TDENGINE_HOME"
+which taos taosd taosdump
+readlink -f "$(command -v taosd)"
+taosd -V
+```
+
+无论选择 A 还是 B，systemd 均继续使用 unit 中的绝对 `ExecStart`，不能依赖 `/etc/profile.d/myenv.sh`。
+
+### 8.5 收敛安装脚本产生的路径和权限
 
 执行第 6.3 节创建生产目录和当前版本软链接，然后确认：
 
@@ -613,7 +662,7 @@ stat -c '%U:%G %a %n' \
 
 `/var/lib/taos` 和 `/var/log/taos` 是安装脚本的初始目录。完成第 10 节配置后，生产数据和主日志应写入 `/data/tdengine`；保留的空目录用于兼容检查，不得被误认为当前生产数据目录。
 
-### 8.5 首次启动保护
+### 8.6 首次启动保护
 
 ```bash
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
@@ -1180,6 +1229,7 @@ SHOW STABLES;
 - [ ] `install.sh`、内层系统文件清单和脚本审计结果已归档；
 - [ ] 程序实际安装在 `/data/module/tdengine-3.4.1.13/taos`；
 - [ ] `/usr/bin`、`/usr/lib*`、`/usr/include` 和 systemd unit 的 TDengine 链接/文件已登记；
+- [ ] 环境变量方案已经登记；如配置 `TDENGINE_HOME`，已写入 `/etc/profile.d/myenv.sh` 并验证；
 - [ ] `taosd -V`、`taos -V`、`taosdump -V` 已记录；
 - [ ] CMDB 已记录主机、版本、FQDN、路径、端口和责任人。
 

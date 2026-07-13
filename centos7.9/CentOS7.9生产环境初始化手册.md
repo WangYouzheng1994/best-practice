@@ -1541,7 +1541,7 @@ echo "=============================="
 | `/etc/security/limits.conf`               | 句柄数/进程数/锁定内存       |
 | `/etc/systemd/system.conf`                | systemd 默认限制       |
 | `/etc/ssh/sshd_config`                    | SSH 安全加固           |
-| `/etc/profile.d/custom.sh`                | 环境变量与别名            |
+| `/etc/profile.d/myenv.sh`                 | 团队统一环境变量与别名        |
 | `/etc/chrony.conf`                        | NTP 时间同步           |
 | `/etc/systemd/journald.conf`              | 日志限制               |
 | `/etc/logrotate.d/custom_apps`            | 应用日志轮转             |
@@ -1557,4 +1557,3 @@ echo "=============================="
 
 
 > **Author:** 王有政 | **最后更新:** 2026-06-15
-
