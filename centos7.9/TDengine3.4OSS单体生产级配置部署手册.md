@@ -208,6 +208,8 @@ ls -ld \
   /data/backup/tdengine
 ```
 
+预期：以上目录全部存在；`install` 权限为 `755`，data、logs、tmp 和 backup 相关目录权限为 `750`，属主均为 `root:root`。
+
 目录用途：
 
 | 路径 | 用途 |
@@ -285,6 +287,8 @@ cd /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13
 /data/module/tdengine/3.4.1.13/taos
 ```
 
+预期：安装器显示 `TDengine TSDB has been installed successfully!`，且没有 `error` 或 `failed`。安装器自动启用 Explorer 属于已知行为，下一步立即关闭。
+
 ### 7.3 安装后处理
 
 安装器会启用 Explorer，并可能把 `/var/log/taos` 权限设置为 `777`，立即处理：
@@ -293,6 +297,16 @@ cd /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
 systemctl disable taos-explorer
 chmod 0750 /var/log/taos
+
+systemctl is-enabled taos-explorer || true
+stat -c '%a %U:%G %n' /var/log/taos
+```
+
+预期：
+
+```text
+disabled
+750 root:root /var/log/taos
 ```
 
 创建当前版本软链接，并把数据、日志指向生产目录：
@@ -307,10 +321,18 @@ ls -ld /data/module/tdengine/3.4.1.13/taos/data
 ls -ld /data/module/tdengine/3.4.1.13/taos/log
 ```
 
+预期三个软链接的目标分别为：
+
+```text
+/data/module/tdengine/current -> /data/module/tdengine/3.4.1.13/taos
+/data/module/tdengine/3.4.1.13/taos/data -> /data/module/tdengine/data
+/data/module/tdengine/3.4.1.13/taos/log -> /data/module/tdengine/logs/taosd
+```
+
 ### 7.4 验证安装结果
 
 ```bash
-test -x /data/module/tdengine/3.4.1.13/taos/bin/taosd
+test -x /data/module/tdengine/3.4.1.13/taos/bin/taosd && echo 'PASS: taosd 可执行文件存在'
 cat /data/module/tdengine/3.4.1.13/taos/.install_path
 
 command -v taos taosd taosdump taosadapter taoskeeper
@@ -324,15 +346,30 @@ systemctl cat taosadapter | grep '^ExecStart='
 systemctl cat taoskeeper | grep '^ExecStart='
 systemctl is-enabled taosd taosadapter taoskeeper
 systemctl is-enabled taos-explorer || true
+systemctl is-active taosd taosadapter taoskeeper || true
 ```
 
-预期：
+首次安装时，本节命令全部必须执行：
 
-- `taosd` 实际路径位于 `/data/module/tdengine/3.4.1.13/taos/bin`；
-- `taosd`、`taosadapter`、`taoskeeper` 已启用但尚未启动；
-- `taos-explorer` 为 disabled；
-- systemd 的 `ExecStart` 指向带版本目录；
-- `/usr/bin` 中的 TDengine 命令是软链接。
+| 命令 | 作用 | 正确结果 |
+|---|---|---|
+| `test -x /data/module/tdengine/3.4.1.13/taos/bin/taosd && echo 'PASS: taosd 可执行文件存在'` | 检查 taosd 文件存在且可以执行 | 显示 `PASS: taosd 可执行文件存在` |
+| `cat /data/module/tdengine/3.4.1.13/taos/.install_path` | 检查安装器记录的实际程序目录 | 输出 `/data/module/tdengine/3.4.1.13/taos` |
+| `command -v taos taosd taosdump taosadapter taoskeeper` | 检查五个 TDengine 命令已加入系统命令路径 | 依次输出 `/usr/bin/taos`、`/usr/bin/taosd`、`/usr/bin/taosdump`、`/usr/bin/taosadapter`、`/usr/bin/taoskeeper`，不得缺少任何一行 |
+| `readlink -f "$(command -v taosd)"` | 穿透 `/usr/bin` 软链接，检查 taosd 实际版本目录 | 输出 `/data/module/tdengine/3.4.1.13/taos/bin/taosd` |
+| `taos -V` | 检查客户端命令可以运行及版本 | 输出包含 `3.4.1.13` |
+| `taosd -V` | 检查服务端命令可以运行及版本 | 输出包含 `3.4.1.13` |
+| `taosdump -V` | 检查备份恢复工具可以运行 | 正常输出 taosdump 版本，不得出现找不到命令或动态库错误 |
+| `systemctl cat taosd \| grep '^ExecStart='` | 检查 taosd 的 systemd 启动命令 | `ExecStart` 指向 `/data/module/tdengine/3.4.1.13/taos/bin/taosd`，配置文件为 `/etc/taos/taos.cfg` |
+| `systemctl cat taosadapter \| grep '^ExecStart='` | 检查 taosAdapter 的 systemd 启动命令 | `ExecStart` 指向 `/data/module/tdengine/3.4.1.13/taos/bin/taosadapter`，配置文件为 `/etc/taos/taosadapter.toml` |
+| `systemctl cat taoskeeper \| grep '^ExecStart='` | 检查 taosKeeper 的 systemd 启动命令 | `ExecStart` 指向 `/data/module/tdengine/3.4.1.13/taos/bin/taoskeeper`，配置文件为 `/etc/taos/taoskeeper.toml` |
+| `systemctl is-enabled taosd taosadapter taoskeeper` | 检查三个生产服务是否开机启动 | 连续输出三行 `enabled` |
+| `systemctl is-enabled taos-explorer \|\| true` | 确认 Explorer 已禁止开机启动 | 输出 `disabled` |
+| `systemctl is-active taosd taosadapter taoskeeper \|\| true` | 确认配置完成前服务没有提前启动 | 连续输出三行 `inactive` |
+
+`disabled` 和 `inactive` 在 systemd 中会返回非零状态，因此命令末尾使用 `|| true`；这里的输出符合预期，不代表执行失败。
+
+任一结果不符合表格要求，停止后续配置，先检查安装目录、软链接和 systemd unit。
 
 ### 7.5 配置环境变量
 
