@@ -199,6 +199,14 @@ dmidecode -s system-product-name 2>/dev/null || true
 
 > **注意：** 历史服务器如果已经使用 `/etc`、`/data/data`、`/data/logs`、`/run` 等旧目录，生产环境不要为了目录统一强行迁移。新部署按本文规范执行；历史实例可在维护窗口评估迁移收益、风险和回滚方案后再处理。
 
+初始化阶段同时创建团队统一环境变量文件。后续 JDK、MySQL、Redis、TDengine 等组件只在该文件中追加自己的 `<SOFTWARE>_HOME` 和 `PATH`，不要为每个组件单独创建 profile 脚本：
+
+```bash
+touch /etc/profile.d/myenv.sh
+chown root:root /etc/profile.d/myenv.sh
+chmod 0644 /etc/profile.d/myenv.sh
+```
+
 ---
 
 ## 2. Yum 镜像源配置
