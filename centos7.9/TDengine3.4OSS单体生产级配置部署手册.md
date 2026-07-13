@@ -30,7 +30,8 @@
 2. 文中的 `<...>` 必须替换成现场值；
 3. 密码不得写入 Shell 命令、Git、工单正文或聊天记录；
 4. 已经运行 TDengine 或存在历史数据时，不要使用本文“首次安装”步骤覆盖安装；
-5. 集群部署不要套用本文。
+5. 集群部署不要套用本文；
+6. 任一命令报错立即停止，确认原因并修正后再继续。
 
 ---
 
@@ -81,7 +82,7 @@ rpm -qa | grep -Ei 'tdengine|taos' || true
 command -v taos taosd taosadapter taoskeeper 2>/dev/null || true
 systemctl list-unit-files | grep -Ei '^taos' || true
 ps -ef | grep -E '[t]aosd|[t]aosadapter|[t]aoskeeper' || true
-ss -lntup | grep -E ':(6030|6041|6043|6060|16030|16041|16043|16044|16045|16046|16047|16048|16049|16060)\b' || true
+ss -lntup | grep -E ':(6030|6041|6043|6044|6045|6046|6047|6048|6049|6060|16030|16041|16043)\b' || true
 find /etc/taos /var/lib/taos /var/log/taos -maxdepth 2 -ls 2>/dev/null
 ```
 
@@ -200,7 +201,11 @@ chmod 0750 /data/module/tdengine/data /data/module/tdengine/logs /data/module/td
 
 df -hT /data
 ls -ld /data/{backup,module,soft,source}
-ls -ld /data/module/tdengine /data/module/tdengine/data /data/backup/tdengine
+ls -ld \
+  /data/module/tdengine \
+  /data/module/tdengine/3.4.1.13/install \
+  /data/module/tdengine/data \
+  /data/backup/tdengine
 ```
 
 目录用途：
@@ -249,12 +254,18 @@ MD5、SHA256 必须显示 `OK`，`gzip -t` 必须没有错误输出。
 ### 7.1 解压
 
 ```bash
+mkdir -p /data/module/tdengine/3.4.1.13/install
+ls -ld /data/module/tdengine/3.4.1.13/install
+
 tar -zxf /data/module/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz \
   -C /data/module/tdengine/3.4.1.13/install
+
 ls -lh \
   /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13/install.sh \
   /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13/package.tar.gz
 ```
+
+必须实际看到 `install.sh` 和 `package.tar.gz`，否则停止安装。
 
 内层 `package.tar.gz` 由 `install.sh` 自动处理，不要手工解压。
 
@@ -387,6 +398,10 @@ minimalTmpDirGB     5
 
 asyncLog            1
 numOfLogLines       10000000
+logKeepDays         30
+
+telemetryReporting  0
+crashReporting      0
 
 monitor             1
 monitorFqdn         <当前hostname>
@@ -399,7 +414,7 @@ monitorInterval     30
 检查配置：
 
 ```bash
-grep -niE '^(firstEp|fqdn|serverPort|dataDir|logDir|tempDir|minimalDataDirGB|minimalLogDirGB|minimalTmpDirGB|asyncLog|numOfLogLines|monitor|monitorFqdn|monitorPort|monitorInterval)[[:space:]]' \
+grep -niE '^(firstEp|fqdn|serverPort|dataDir|logDir|tempDir|minimalDataDirGB|minimalLogDirGB|minimalTmpDirGB|asyncLog|numOfLogLines|logKeepDays|telemetryReporting|crashReporting|monitor|monitorFqdn|monitorPort|monitorInterval)[[:space:]]' \
   /etc/taos/taos.cfg
 ```
 
@@ -422,6 +437,9 @@ vim /etc/taos/taosadapter.toml
 debug = false
 port = 16041
 taosConfigDir = "/etc/taos"
+
+[cors]
+allowAllOrigins = false
 
 [log]
 path = "/data/module/tdengine/logs/adapter"
@@ -452,9 +470,18 @@ enable = false
 
 [opentsdb_telnet]
 enable = false
+
+[opentsdb]
+enable = false
+
+[influxdb]
+enable = false
+
+[prometheus]
+enable = false
 ```
 
-不要追加包内不存在的配置段。只修改实际文件中已有参数。
+以上是 taosAdapter 的协议入口，未经过业务评审不得启用；不影响 taosKeeper 的 `/metrics/v2`。不要追加包内不存在的配置段，只修改实际文件中已有参数。
 
 ---
 
@@ -468,6 +495,7 @@ systemctl enable --now taosadapter
 systemctl status taosd --no-pager -l
 systemctl status taosadapter --no-pager -l
 ss -lntp | grep -E ':(16030|16041)\b'
+curl -fsS http://127.0.0.1:16041/-/ping
 journalctl -u taosd -u taosadapter --since '-10 min' --no-pager
 ```
 
@@ -527,7 +555,7 @@ vim /etc/taos/taoskeeper.toml
 
 ```toml
 instanceId = 64
-host = "127.0.0.1"
+host = "0.0.0.0"
 port = 16043
 RotationInterval = "15s"
 
@@ -561,6 +589,8 @@ compress = true
 reservedDiskSize = "5GB"
 ```
 
+`host = "0.0.0.0"` 用于允许 Prometheus 从监控网段访问，`16043` 必须由网络 ACL 或 firewalld 仅对白名单开放。
+
 限制配置文件权限：
 
 ```bash
@@ -573,6 +603,7 @@ chmod 0600 /etc/taos/taoskeeper.toml
 ```bash
 systemctl enable --now taoskeeper
 systemctl status taoskeeper --no-pager -l
+ss -lntp | grep ':16043\b'
 curl -fsS http://127.0.0.1:16043/check_health
 curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 ```
@@ -588,8 +619,6 @@ curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 | `16030/TCP` | taosd、客户端连接 | 业务应用网段和运维网段 |
 | `16041/TCP` | taosAdapter、应用连接 | 业务应用网段和运维网段 |
 | `16043/TCP` | taosKeeper、Prometheus | 监控网段和运维网段 |
-| `16044～16049` | 可选采集协议预留 | 不开放 |
-| `16060/TCP` | Explorer 预留 | 不开放，服务保持 disabled |
 
 端口已经登记到《服务器端口统一规划规范.md》。数据库端口不得对公网开放。
 
@@ -777,13 +806,12 @@ curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 systemctl is-active taosd taosadapter taoskeeper
 systemctl is-enabled taosd taosadapter taoskeeper
 systemctl is-enabled taos-explorer || true
-ss -lntup | grep -E ':(6030|6041|6043|6060|16030|16041|16043|16044|16045|16046|16047|16048|16049|16060)\b'
+ss -lntup | grep -E ':(6030|6041|6043|6044|6045|6046|6047|6048|6049|6060|16030|16041|16043)\b'
 ```
 
 - [ ] taosd、taosadapter、taoskeeper 为 active/enabled；
 - [ ] 仅监听审批通过的 `16030`、`16041`、`16043`；
-- [ ] 官方默认端口 `6030`、`6041`、`6043`、`6060` 未监听；
-- [ ] `16044～16049`、`16060` 未对外开放；
+- [ ] 官方默认端口 `6030`、`6041`、`6043～6049`、`6060` 未监听；
 - [ ] 数据库端口未对公网开放。
 
 ### 16.3 读写验证
