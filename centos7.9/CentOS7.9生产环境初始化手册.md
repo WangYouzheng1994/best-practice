@@ -175,15 +175,27 @@ dmidecode -s system-product-name 2>/dev/null || true
 |---|---|---|
 | `/data/module` | 基础组件安装包、解压目录、版本目录、当前版本软链接，以及组件自包含目录 | `/data/module/mysql`、`/data/module/redis7.2` |
 | `/data/soft` | Java 业务工程和前端工程的发布内容 | `/data/soft/java`、`/data/soft/www` |
+| `/data/source` | Java、前端等业务工程的源码和构建源文件 | `/data/source/java`、`/data/source/www` |
+| `/data/backup` | 本机临时备份目录 | `/data/backup/mysql`、`/data/backup/tdengine` |
 | `/data/module/{组件}` | 单个基础组件的配置、数据、日志、运行时文件、备份聚合目录 | `/data/module/redis7.2/{conf,data,logs,run,backup}` |
+
+初始化并确认固定顶层目录：
+
+```bash
+mkdir -p /data/{backup,module,soft,source}
+chown root:root /data /data/{backup,module,soft,source}
+chmod 0755 /data /data/{backup,module,soft,source}
+ls -ld /data /data/{backup,module,soft,source}
+```
 
 目录使用原则：
 
-1. `/data` 只是示例数据盘挂载点，不代表所有服务器都必须叫 `/data`；
-2. 单个基础组件的配置、数据、日志、运行时文件和备份优先聚合在自己的组件目录下；
-3. Redis 等中间件可采用 `/data/module/{当前版本软链接}/{conf,data,logs,run,backup}`；
-4. JDK、MySQL、Redis、Nginx、TDengine 等基础组件的安装包、源码包和解压目录统一放在 `/data/module`；`/data/soft` 只存放 Java 业务工程和前端工程的发布内容，不存放基础组件安装包；
-5. 生产服务进程不应拥有配置文件写权限，配置文件建议 `root:{服务用户}`、`640` 或按服务要求最小授权。
+1. `/data` 下固定保留 `backup`、`module`、`soft`、`source` 四个顶层目录，组件不得自行新增其他顶层目录；
+2. JDK、MySQL、Redis、Nginx、TDengine 等基础组件统一放在 `/data/module`；
+3. Java 业务工程和前端工程的发布内容放在 `/data/soft`，源码和构建源文件放在 `/data/source`；
+4. 本机临时备份统一放在 `/data/backup`，并按组件建立子目录；本机备份不能替代远端备份；
+5. 单个基础组件的数据、日志和临时文件优先聚合在 `/data/module/{组件}` 下；
+6. 生产服务进程不应拥有配置文件写权限，配置文件建议 `root:{服务用户}`、`640` 或按服务要求最小授权。
 
 示例：
 

@@ -15,9 +15,9 @@
 本文已经固定安装方式、目录、端口和组件，执行人员按顺序操作即可：
 
 - 使用官方 Linux-Generic x64 压缩包；
-- 程序安装到带版本目录 `/data/module/tdengine-3.4.1.13/taos`；
-- 当前版本软链接为 `/data/module/tdengine`；
-- 数据、日志和临时文件放在 `/data/tdengine`；
+- 程序安装到带版本目录 `/data/module/tdengine/3.4.1.13/taos`；
+- 当前版本软链接为 `/data/module/tdengine/current`；
+- 数据、日志和临时文件放在 `/data/module/tdengine`；
 - 使用团队自定义端口 `16030`、`16041`、`16043`，不使用官方默认端口；
 - 启动 `taosd`、`taosadapter`、`taoskeeper`；
 - 停用 `taos-explorer`；
@@ -190,16 +190,17 @@ TDengine 初始化完成后，不要直接修改 hostname 或 `fqdn`。
 
 ```bash
 mkdir -p /data/module
-mkdir -p /data/module/tdengine-3.4.1.13
-mkdir -p /data/tdengine/{data,log/taosd,log/adapter,log/keeper,tmp}
-mkdir -p /backup/tdengine
+mkdir -p /data/module/tdengine/3.4.1.13
+mkdir -p /data/module/tdengine/{data,logs/taosd,logs/adapter,logs/keeper,tmp}
+mkdir -p /data/backup/tdengine
 
-chown -R root:root /data/module/tdengine-3.4.1.13 /data/tdengine /backup/tdengine
-chmod 0755 /data/module /data/module/tdengine-3.4.1.13
-chmod 0750 /data/tdengine /data/tdengine/data /data/tdengine/log /data/tdengine/log/* /data/tdengine/tmp /backup/tdengine
+chown -R root:root /data/module/tdengine /data/backup/tdengine
+chmod 0755 /data/module /data/module/tdengine /data/module/tdengine/3.4.1.13
+chmod 0750 /data/module/tdengine/data /data/module/tdengine/logs /data/module/tdengine/logs/* /data/module/tdengine/tmp /data/backup/tdengine
 
-df -hT /data /backup
-ls -ld /data /data/tdengine /data/tdengine/data /backup /backup/tdengine
+df -hT /data
+ls -ld /data/{backup,module,soft,source}
+ls -ld /data/module/tdengine /data/module/tdengine/data /data/backup/tdengine
 ```
 
 目录用途：
@@ -208,14 +209,14 @@ ls -ld /data /data/tdengine /data/tdengine/data /backup /backup/tdengine
 |---|---|
 | `/data/module/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz` | 安装包 |
 | `/data/module/tdengine-tsdb-oss-3.4.1.13` | 解压目录 |
-| `/data/module/tdengine-3.4.1.13/taos` | 程序版本目录 |
-| `/data/module/tdengine` | 当前版本软链接 |
-| `/data/tdengine/data` | 数据和 WAL |
-| `/data/tdengine/log/*` | 各组件日志 |
-| `/data/tdengine/tmp` | 临时文件 |
-| `/backup/tdengine` | 本机备份暂存 |
+| `/data/module/tdengine/3.4.1.13/taos` | 程序版本目录 |
+| `/data/module/tdengine/current` | 当前版本软链接 |
+| `/data/module/tdengine/data` | 数据和 WAL |
+| `/data/module/tdengine/logs/*` | 各组件日志 |
+| `/data/module/tdengine/tmp` | 临时文件 |
+| `/data/backup/tdengine` | 本机备份暂存 |
 
-`/backup` 必须位于独立存储或将备份继续复制到其他主机；与数据同盘不算有效灾备。
+`/data/backup` 是本机备份目录，备份完成后仍需复制到其他主机或独立备份存储。
 
 ---
 
@@ -268,13 +269,13 @@ ls -lh install.sh package.tar.gz
 ./install.sh \
   -v server \
   -e no \
-  -d /data/module/tdengine-3.4.1.13
+  -d /data/module/tdengine/3.4.1.13
 ```
 
 注意：`-d` 指定的是父目录，安装器会自动追加 `/taos`。最终目录应为：
 
 ```text
-/data/module/tdengine-3.4.1.13/taos
+/data/module/tdengine/3.4.1.13/taos
 ```
 
 ### 7.3 安装后处理
@@ -290,20 +291,20 @@ chmod 0750 /var/log/taos
 创建当前版本软链接，并把数据、日志指向生产目录：
 
 ```bash
-ln -sfnT /data/module/tdengine-3.4.1.13/taos /data/module/tdengine
-ln -sfnT /data/tdengine/data /data/module/tdengine-3.4.1.13/taos/data
-ln -sfnT /data/tdengine/log/taosd /data/module/tdengine-3.4.1.13/taos/log
+ln -sfnT /data/module/tdengine/3.4.1.13/taos /data/module/tdengine/current
+ln -sfnT /data/module/tdengine/data /data/module/tdengine/3.4.1.13/taos/data
+ln -sfnT /data/module/tdengine/logs/taosd /data/module/tdengine/3.4.1.13/taos/log
 
-ls -ld /data/module/tdengine
-ls -ld /data/module/tdengine-3.4.1.13/taos/data
-ls -ld /data/module/tdengine-3.4.1.13/taos/log
+ls -ld /data/module/tdengine/current
+ls -ld /data/module/tdengine/3.4.1.13/taos/data
+ls -ld /data/module/tdengine/3.4.1.13/taos/log
 ```
 
 ### 7.4 验证安装结果
 
 ```bash
-test -x /data/module/tdengine-3.4.1.13/taos/bin/taosd
-cat /data/module/tdengine-3.4.1.13/taos/.install_path
+test -x /data/module/tdengine/3.4.1.13/taos/bin/taosd
+cat /data/module/tdengine/3.4.1.13/taos/.install_path
 
 command -v taos taosd taosdump taosadapter taoskeeper
 readlink -f "$(command -v taosd)"
@@ -320,7 +321,7 @@ systemctl is-enabled taos-explorer || true
 
 预期：
 
-- `taosd` 实际路径位于 `/data/module/tdengine-3.4.1.13/taos/bin`；
+- `taosd` 实际路径位于 `/data/module/tdengine/3.4.1.13/taos/bin`；
 - `taosd`、`taosadapter`、`taoskeeper` 已启用但尚未启动；
 - `taos-explorer` 为 disabled；
 - systemd 的 `ExecStart` 指向带版本目录；
@@ -340,7 +341,7 @@ vim /etc/profile.d/myenv.sh
 
 ```bash
 # TDENGINE_HOME：TDengine 当前版本软链接，升级时只调整软链接
-export TDENGINE_HOME=/data/module/tdengine
+export TDENGINE_HOME=/data/module/tdengine/current
 export PATH=$TDENGINE_HOME/bin:$PATH
 ```
 
@@ -358,7 +359,7 @@ taos -V
 taosd -V
 ```
 
-预期 `which` 指向 `/data/module/tdengine/bin/`，`readlink -f` 最终指向当前带版本目录。
+预期 `which` 指向 `/data/module/tdengine/current/bin/`，`readlink -f` 最终指向当前带版本目录。
 
 systemd 使用绝对 `ExecStart`，不依赖交互式 Shell 环境变量。
 
@@ -380,9 +381,9 @@ firstEp             <当前hostname>:16030
 fqdn                <当前hostname>
 serverPort          16030
 
-dataDir             /data/tdengine/data
-logDir              /data/tdengine/log/taosd
-tempDir             /data/tdengine/tmp
+dataDir             /data/module/tdengine/data
+logDir              /data/module/tdengine/logs/taosd
+tempDir             /data/module/tdengine/tmp
 
 minimalDataDirGB    20
 minimalLogDirGB     5
@@ -427,7 +428,7 @@ port = 16041
 taosConfigDir = "/etc/taos"
 
 [log]
-path = "/data/tdengine/log/adapter"
+path = "/data/module/tdengine/logs/adapter"
 level = "info"
 keepDays = 30
 rotationCount = 30
@@ -555,7 +556,7 @@ includeTables = []
 cacheTTL = 300
 
 [log]
-path = "/data/tdengine/log/keeper"
+path = "/data/module/tdengine/logs/keeper"
 level = "info"
 rotationCount = 7
 keepDays = 30
@@ -656,7 +657,7 @@ SHOW DATABASES;
 ### 14.1 执行一次全量备份
 
 ```bash
-BACKUP_DIR="/backup/tdengine/$(date +%F_%H%M%S)"
+BACKUP_DIR="/data/backup/tdengine/$(date +%F_%H%M%S)"
 
 mkdir -p "$BACKUP_DIR"
 chmod 0750 "$BACKUP_DIR"
@@ -690,14 +691,14 @@ du -sh "$BACKUP_DIR"
 
 ### 14.2 做一次恢复演练
 
-优先恢复到独立测试实例。下面以原库 `prod_iot`、恢复库 `restore_drill_20260713`、备份目录 `/backup/tdengine/2026-07-13_150000` 为例，执行前替换成实际值：
+优先恢复到独立测试实例。下面以原库 `prod_iot`、恢复库 `restore_drill_20260713`、备份目录 `/data/backup/tdengine/2026-07-13_150000` 为例，执行前替换成实际值：
 
 ```bash
-cd /backup/tdengine/2026-07-13_150000
+cd /data/backup/tdengine/2026-07-13_150000
 sha256sum -c SHA256SUMS
 
 taosdump \
-  -i /backup/tdengine/2026-07-13_150000 \
+  -i /data/backup/tdengine/2026-07-13_150000 \
   -h 127.0.0.1 \
   -P 16030 \
   -u root \
@@ -764,9 +765,9 @@ curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 - [ ] CentOS 7.9 x86_64；
 - [ ] hostname 唯一并解析到内网 IP；
 - [ ] 官方包 MD5、SHA256、gzip 校验通过；
-- [ ] 程序位于 `/data/module/tdengine-3.4.1.13/taos`；
-- [ ] `/data/module/tdengine` 指向当前版本；
-- [ ] data/log/tmp 指向 `/data/tdengine`；
+- [ ] 程序位于 `/data/module/tdengine/3.4.1.13/taos`；
+- [ ] `/data/module/tdengine/current` 指向当前版本；
+- [ ] data/log/tmp 位于 `/data/module/tdengine`；
 - [ ] `taos-explorer` 为 disabled；
 - [ ] `/var/log/taos` 不是 `777`；
 - [ ] `taos.cfg` 没有重复参数；
@@ -854,8 +855,8 @@ journalctl -u taosadapter --since '-30 min' --no-pager
 journalctl -u taoskeeper --since '-30 min' --no-pager
 
 # 资源
-df -hT /data /backup 2>/dev/null
-du -sh /data/tdengine/data /data/tdengine/log/* /data/tdengine/tmp
+df -hT /data
+du -sh /data/module/tdengine/data /data/module/tdengine/logs/* /data/module/tdengine/tmp
 iostat -x 1 5
 chronyc tracking
 
@@ -901,8 +902,8 @@ systemctl stop taoskeeper taosadapter taosd
 
 # 解压已校验的新包后进入其目录
 cd /data/module/tdengine-tsdb-oss-3.4.x.y
-mkdir -p /data/module/tdengine-3.4.x.y
-./install.sh -v server -e no -d /data/module/tdengine-3.4.x.y
+mkdir -p /data/module/tdengine/3.4.x.y
+./install.sh -v server -e no -d /data/module/tdengine/3.4.x.y
 
 # 恢复生产安全基线
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
@@ -913,9 +914,9 @@ chmod 0750 /var/log/taos
 find /etc/taos -maxdepth 1 -type f -name '*.new' -ls
 
 # 修正当前版本和数据日志软链接
-ln -sfnT /data/module/tdengine-3.4.x.y/taos /data/module/tdengine
-ln -sfnT /data/tdengine/data /data/module/tdengine-3.4.x.y/taos/data
-ln -sfnT /data/tdengine/log/taosd /data/module/tdengine-3.4.x.y/taos/log
+ln -sfnT /data/module/tdengine/data /data/module/tdengine/3.4.x.y/taos/data
+ln -sfnT /data/module/tdengine/logs/taosd /data/module/tdengine/3.4.x.y/taos/log
+ln -sfnT /data/module/tdengine/3.4.x.y/taos /data/module/tdengine/current
 
 # 确认 systemd 已指向新版本
 readlink -f "$(command -v taosd)"
@@ -937,15 +938,15 @@ taosd -V
 systemctl stop taoskeeper taosadapter taosd
 
 cd /data/module/tdengine-tsdb-oss-3.4.1.13
-./install.sh -v server -e no -d /data/module/tdengine-3.4.1.13
+./install.sh -v server -e no -d /data/module/tdengine/3.4.1.13
 
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
 systemctl disable taos-explorer
 chmod 0750 /var/log/taos
 
-ln -sfnT /data/module/tdengine-3.4.1.13/taos /data/module/tdengine
-ln -sfnT /data/tdengine/data /data/module/tdengine-3.4.1.13/taos/data
-ln -sfnT /data/tdengine/log/taosd /data/module/tdengine-3.4.1.13/taos/log
+ln -sfnT /data/module/tdengine/data /data/module/tdengine/3.4.1.13/taos/data
+ln -sfnT /data/module/tdengine/logs/taosd /data/module/tdengine/3.4.1.13/taos/log
+ln -sfnT /data/module/tdengine/3.4.1.13/taos /data/module/tdengine/current
 
 systemctl start taosd
 systemctl start taosadapter
