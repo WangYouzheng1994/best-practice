@@ -274,7 +274,7 @@ namei -om "$TD_DATA"
 
 ---
 
-## 6. 获取并校验安装包
+## 6. 下载外层 tar.gz 并校验
 
 进入制品目录：
 
@@ -309,9 +309,9 @@ gzip: 无错误输出
 
 ---
 
-## 7. 解压并安装
+## 7. 解压外层 tar.gz 并安装
 
-### 7.1 解压
+### 7.1 解压下载的外层 tar.gz
 
 ```bash
 cd "$TD_SOFT_DIR"
@@ -324,7 +324,12 @@ test ! -e "tdengine-tsdb-oss-${TD_VERSION}" || {
 tar -tzf "$TD_PKG" | head -30
 tar -zxf "$TD_PKG"
 cd "tdengine-tsdb-oss-${TD_VERSION}"
+
+pwd
+ls -lh install.sh package.tar.gz
 ```
+
+`tar -zxf "$TD_PKG"` 就是解压下载包的动作。解压后会看到 `install.sh` 和内层 `package.tar.gz`；不要手工解压内层 `package.tar.gz`，后续由官方 `install.sh` 自动处理。
 
 确认安装脚本参数：
 
@@ -333,7 +338,7 @@ cd "tdengine-tsdb-oss-${TD_VERSION}"
 sha256sum install.sh start-all.sh stop-all.sh package.tar.gz
 ```
 
-### 7.2 执行安装
+### 7.2 运行解压目录中的 install.sh
 
 ```bash
 ./install.sh \
