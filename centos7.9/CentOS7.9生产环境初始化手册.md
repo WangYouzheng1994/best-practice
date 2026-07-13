@@ -173,16 +173,16 @@ dmidecode -s system-product-name 2>/dev/null || true
 
 | 目录 | 用途 | 示例 |
 |---|---|---|
-| `/data/module` | 软件安装目录、版本目录、当前版本软链接，以及应用自包含目录 | `/data/module/mysql`、`/data/module/redis7.2` |
-| `/data/soft` | 软件包、安装包、离线依赖包暂存目录，可选 | `/data/soft/*.tar.gz` |
-| `/data/module/{应用}` | 单个应用的配置、数据、日志、运行时文件、备份聚合目录 | `/data/module/redis7.2/{conf,data,logs,run,backup}` |
+| `/data/module` | 基础组件安装包、解压目录、版本目录、当前版本软链接，以及组件自包含目录 | `/data/module/mysql`、`/data/module/redis7.2` |
+| `/data/soft` | Java 业务工程和前端工程的发布内容 | `/data/soft/java`、`/data/soft/www` |
+| `/data/module/{组件}` | 单个基础组件的配置、数据、日志、运行时文件、备份聚合目录 | `/data/module/redis7.2/{conf,data,logs,run,backup}` |
 
 目录使用原则：
 
 1. `/data` 只是示例数据盘挂载点，不代表所有服务器都必须叫 `/data`；
-2. 单个应用的配置、数据、日志、运行时文件和备份优先聚合在自己的应用目录下；
+2. 单个基础组件的配置、数据、日志、运行时文件和备份优先聚合在自己的组件目录下；
 3. Redis 等中间件可采用 `/data/module/{当前版本软链接}/{conf,data,logs,run,backup}`；
-4. 软件包、源码包、离线依赖包可临时放在 `/data/soft`，也可按团队现状放在 `/data/module`，但应避免与运行数据混淆；
+4. JDK、MySQL、Redis、Nginx、TDengine 等基础组件的安装包、源码包和解压目录统一放在 `/data/module`；`/data/soft` 只存放 Java 业务工程和前端工程的发布内容，不存放基础组件安装包；
 5. 生产服务进程不应拥有配置文件写权限，配置文件建议 `root:{服务用户}`、`640` 或按服务要求最小授权。
 
 示例：
