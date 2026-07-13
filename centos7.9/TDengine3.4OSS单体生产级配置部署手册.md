@@ -198,8 +198,8 @@ chown -R root:root /data/soft/tdengine /data/module/tdengine-3.4.1.13 /data/tden
 chmod 0755 /data/soft/tdengine /data/soft/tdengine/3.4.1.13 /data/module/tdengine-3.4.1.13
 chmod 0750 /data/tdengine /data/tdengine/data /data/tdengine/log /data/tdengine/log/* /data/tdengine/tmp /backup/tdengine
 
-df -hT /data /backup 2>/dev/null || true
-namei -om /data/tdengine/data
+df -hT /data /backup
+ls -ld /data /data/tdengine /data/tdengine/data /backup /backup/tdengine
 ```
 
 目录用途：
