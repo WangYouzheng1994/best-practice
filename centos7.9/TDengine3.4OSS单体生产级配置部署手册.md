@@ -12,7 +12,7 @@
 
 本文按实际部署顺序编写。第一次部署时，从第 1 节开始依次执行，不要跳过验证步骤。
 
-本文已经固定以下选择，执行人员不需要再次做技术选型：
+本文已经固定安装方式、目录、端口和组件，执行人员按顺序操作即可：
 
 - 使用官方 Linux-Generic x64 压缩包；
 - 程序安装到带版本目录 `/data/module/tdengine-3.4.1.13/taos`；
@@ -34,45 +34,11 @@
 
 ---
 
-## 1. 进入 root Shell 并设置部署变量
+## 1. 进入 root Shell
 
 ```bash
 sudo -i
-
-export TD_VERSION=3.4.1.13
-export TD_PKG="tdengine-tsdb-oss-${TD_VERSION}-linux-x64.tar.gz"
-export TD_URL="https://downloads.taosdata.com/tdengine-tsdb-oss/${TD_VERSION}/${TD_PKG}"
-export TD_MD5=4c0fc6e31d59107a5125d5284fc58c32
-export TD_SHA256=1b8cba22f1ea510ec72863041413ad86970ece2501d15c6eff482db189add515
-
-export TD_SOFT_DIR="/data/soft/tdengine/${TD_VERSION}"
-export TD_INSTALL_PARENT="/data/module/tdengine-${TD_VERSION}"
-export TD_HOME="${TD_INSTALL_PARENT}/taos"
-export TD_CURRENT=/data/module/tdengine
-
-export TD_DATA=/data/tdengine/data
-export TD_LOG=/data/tdengine/log
-export TD_TMP=/data/tdengine/tmp
-export TD_BACKUP=/backup/tdengine
-
-export TD_HOST="$(hostnamectl --static)"
-export TD_IP='<服务器内网IP>'
 ```
-
-必须替换 `TD_IP`，然后检查变量：
-
-```bash
-printf 'TD_VERSION=%s\nTD_HOST=%s\nTD_IP=%s\nTD_HOME=%s\n' \
-  "$TD_VERSION" "$TD_HOST" "$TD_IP" "$TD_HOME"
-
-case "$TD_IP" in
-  '<'*|'') echo 'ERROR: 请先填写 TD_IP'; exit 1 ;;
-  127.*|0.*|169.254.*) echo 'ERROR: TD_IP 必须是服务器真实内网 IP'; exit 1 ;;
-esac
-
-```
-
-如果中途退出 Shell，重新执行本节变量块后再继续。
 
 ---
 
@@ -130,10 +96,9 @@ find /etc/taos /var/lib/taos /var/log/taos -maxdepth 2 -ls 2>/dev/null
 本文默认保留服务器现有静态 hostname，不无条件修改。
 
 ```bash
-printf 'hostname=<%s>\n' "$(hostname)"
-printf 'hostname-f=<%s>\n' "$(hostname -f)"
-printf 'static=<%s>\n' "$(hostnamectl --static)"
-getent ahostsv4 "$TD_HOST" || true
+hostnamectl --static
+hostname -f
+getent ahostsv4 "$(hostnamectl --static)" || true
 ```
 
 hostname 必须唯一、稳定，不包含空格和多余点号。
@@ -144,22 +109,10 @@ hostname 必须唯一、稳定，不包含空格和多余点号。
 
 ```bash
 hostnamectl set-hostname <新hostname>
-export TD_HOST="$(hostnamectl --static)"
-printf 'TD_HOST=%s\n' "$TD_HOST"
+hostnamectl --static
 ```
 
-确认最终 hostname 合格：
-
-```bash
-case "$TD_HOST" in
-  ''|localhost|localhost.localdomain|*' '*|*..*|.*|*.)
-    echo "ERROR: hostname 仍不合格：$TD_HOST"
-    exit 1
-    ;;
-esac
-```
-
-如果 `getent` 没有返回 `$TD_IP`，先备份再编辑 `/etc/hosts`：
+如果 `getent` 没有返回服务器真实内网 IP，先备份再编辑 `/etc/hosts`：
 
 ```bash
 cp -a /etc/hosts "/etc/hosts.$(date +%F_%H%M%S).bak"
@@ -192,20 +145,16 @@ vim /etc/hosts
 保存后验证：
 
 ```bash
-getent ahostsv4 "$TD_HOST"
-getent hosts "$TD_HOST"
-getent ahostsv4 "$TD_HOST" | awk '{print $1}' | grep -Fx "$TD_IP"
-
-if grep -E '^(127\.[0-9.]+|::1)[[:space:]]' /etc/hosts | grep -Fw "$TD_HOST"; then
-  echo "ERROR: $TD_HOST 仍然映射到了回环地址，请修正 /etc/hosts"
-  exit 1
-fi
+getent ahostsv4 "$(hostnamectl --static)"
+getent hosts "$(hostnamectl --static)"
+getent ahostsv4 "$(hostnamectl --static)" | awk '{print $1}' | sort -u
+grep -E '^(127\.[0-9.]+|::1)[[:space:]]' /etc/hosts | grep -Fw "$(hostnamectl --static)" || true
 
 # 现场允许 ICMP 时执行
-ping -c 3 "$TD_HOST"
+ping -c 3 "$(hostnamectl --static)"
 ```
 
-只有 `getent` 返回真实内网 IP，并且回环地址冲突检查没有输出，才能继续部署。
+`getent` 只能返回真实内网 IP，最后一条回环地址检查必须没有输出。
 
 TDengine 初始化完成后，不要直接修改 hostname 或 `fqdn`。
 
@@ -240,22 +189,17 @@ TDengine 初始化完成后，不要直接修改 hostname 或 `fqdn`。
 ## 5. 创建目录
 
 ```bash
-install -d -m 0755 -o root -g root \
-  /data/soft \
-  /data/module \
-  "$TD_SOFT_DIR" \
-  "$TD_INSTALL_PARENT"
+mkdir -p /data/soft/tdengine/3.4.1.13
+mkdir -p /data/module/tdengine-3.4.1.13
+mkdir -p /data/tdengine/{data,log/taosd,log/adapter,log/keeper,tmp}
+mkdir -p /backup/tdengine
 
-install -d -m 0750 -o root -g root \
-  "$TD_DATA" \
-  "$TD_LOG/taosd" \
-  "$TD_LOG/adapter" \
-  "$TD_LOG/keeper" \
-  "$TD_TMP" \
-  "$TD_BACKUP"
+chown -R root:root /data/soft/tdengine /data/module/tdengine-3.4.1.13 /data/tdengine /backup/tdengine
+chmod 0755 /data/soft/tdengine /data/soft/tdengine/3.4.1.13 /data/module/tdengine-3.4.1.13
+chmod 0750 /data/tdengine /data/tdengine/data /data/tdengine/log /data/tdengine/log/* /data/tdengine/tmp /backup/tdengine
 
 df -hT /data /backup 2>/dev/null || true
-namei -om "$TD_DATA"
+namei -om /data/tdengine/data
 ```
 
 目录用途：
@@ -274,77 +218,56 @@ namei -om "$TD_DATA"
 
 ---
 
-## 6. 下载外层 tar.gz 并校验
+## 6. 下载并校验安装包
 
 进入制品目录：
 
 ```bash
-cd "$TD_SOFT_DIR"
+cd /data/soft/tdengine/3.4.1.13
 ```
 
 生产环境推荐从企业制品库上传到该目录。如果当前服务器允许访问官方 CDN，可以执行：
 
 ```bash
-wget -O "$TD_PKG" "$TD_URL"
+wget -O tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz \
+  https://downloads.taosdata.com/tdengine-tsdb-oss/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz
 ```
 
 校验文件：
 
 ```bash
-test "$(stat -c '%s' "$TD_PKG")" -eq 300274656
-echo "${TD_MD5}  ${TD_PKG}" | md5sum -c -
-echo "${TD_SHA256}  ${TD_PKG}" | sha256sum -c -
-gzip -t "$TD_PKG"
+test "$(stat -c '%s' tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz)" -eq 300274656
+echo '4c0fc6e31d59107a5125d5284fc58c32  tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz' | md5sum -c -
+echo '1b8cba22f1ea510ec72863041413ad86970ece2501d15c6eff482db189add515  tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz' | sha256sum -c -
+gzip -t tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz
 ```
 
-预期三项均成功：
+MD5、SHA256 必须显示 `OK`，`gzip -t` 必须没有错误输出。
 
-```text
-MD5: OK
-SHA256: OK
-gzip: 无错误输出
-```
-
-`TD_SHA256` 是 2026-07-13 对官方 CDN 文件的实算值，不是厂商数字签名。企业制品库仍应保存自己的 SHA256 清单和下载审计记录。
+上面的 SHA256 是 2026-07-13 对官方 CDN 文件的实算值，不是厂商数字签名。企业制品库仍应保存自己的 SHA256 清单和下载审计记录。
 
 ---
 
-## 7. 解压外层 tar.gz 并安装
+## 7. 解压并安装
 
-### 7.1 解压下载的外层 tar.gz
+### 7.1 解压
 
 ```bash
-cd "$TD_SOFT_DIR"
-
-test ! -e "tdengine-tsdb-oss-${TD_VERSION}" || {
-  echo 'ERROR: 解压目录已存在，请确认是否为上次残留'
-  exit 1
-}
-
-tar -tzf "$TD_PKG" | head -30
-tar -zxf "$TD_PKG"
-cd "tdengine-tsdb-oss-${TD_VERSION}"
-
-pwd
+cd /data/soft/tdengine/3.4.1.13
+tar -zxf tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz
+cd tdengine-tsdb-oss-3.4.1.13
 ls -lh install.sh package.tar.gz
 ```
 
-`tar -zxf "$TD_PKG"` 就是解压下载包的动作。解压后会看到 `install.sh` 和内层 `package.tar.gz`；不要手工解压内层 `package.tar.gz`，后续由官方 `install.sh` 自动处理。
+内层 `package.tar.gz` 由 `install.sh` 自动处理，不要手工解压。
 
-确认安装脚本参数：
-
-```bash
-./install.sh -h
-sha256sum install.sh start-all.sh stop-all.sh package.tar.gz
-```
-
-### 7.2 运行解压目录中的 install.sh
+### 7.2 安装
 
 ```bash
 ./install.sh \
   -v server \
   -e no \
-  -d "$TD_INSTALL_PARENT"
+  -d /data/module/tdengine-3.4.1.13
 ```
 
 注意：`-d` 指定的是父目录，安装器会自动追加 `/taos`。最终目录应为：
@@ -353,7 +276,7 @@ sha256sum install.sh start-all.sh stop-all.sh package.tar.gz
 /data/module/tdengine-3.4.1.13/taos
 ```
 
-### 7.3 安装后立即收敛
+### 7.3 安装后处理
 
 安装器会启用 Explorer，并可能把 `/var/log/taos` 权限设置为 `777`，立即处理：
 
@@ -363,27 +286,23 @@ systemctl disable taos-explorer
 chmod 0750 /var/log/taos
 ```
 
-创建当前版本软链接并修正安装器的 data/log 软链接：
+创建当前版本软链接，并把数据、日志指向生产目录：
 
 ```bash
-[ ! -e "$TD_CURRENT" ] || [ -L "$TD_CURRENT" ] || {
-  echo "ERROR: $TD_CURRENT 不是软链接"
-  exit 1
-}
+ln -sfnT /data/module/tdengine-3.4.1.13/taos /data/module/tdengine
+ln -sfnT /data/tdengine/data /data/module/tdengine-3.4.1.13/taos/data
+ln -sfnT /data/tdengine/log/taosd /data/module/tdengine-3.4.1.13/taos/log
 
-test -L "$TD_HOME/data"
-test -L "$TD_HOME/log"
-
-ln -sfn "$TD_HOME" "$TD_CURRENT"
-ln -sfn "$TD_DATA" "$TD_HOME/data"
-ln -sfn "$TD_LOG/taosd" "$TD_HOME/log"
+ls -ld /data/module/tdengine
+ls -ld /data/module/tdengine-3.4.1.13/taos/data
+ls -ld /data/module/tdengine-3.4.1.13/taos/log
 ```
 
 ### 7.4 验证安装结果
 
 ```bash
-test -x "$TD_HOME/bin/taosd"
-cat "$TD_HOME/.install_path"
+test -x /data/module/tdengine-3.4.1.13/taos/bin/taosd
+cat /data/module/tdengine-3.4.1.13/taos/.install_path
 
 command -v taos taosd taosdump taosadapter taoskeeper
 readlink -f "$(command -v taosd)"
@@ -400,7 +319,7 @@ systemctl is-enabled taos-explorer || true
 
 预期：
 
-- `taosd` 实际路径位于 `$TD_HOME/bin`；
+- `taosd` 实际路径位于 `/data/module/tdengine-3.4.1.13/taos/bin`；
 - `taosd`、`taosadapter`、`taoskeeper` 已启用但尚未启动；
 - `taos-explorer` 为 disabled；
 - systemd 的 `ExecStart` 指向带版本目录；
@@ -453,7 +372,7 @@ cp -a /etc/taos/taos.cfg "/etc/taos/taos.cfg.$(date +%F_%H%M%S).bak"
 vim /etc/taos/taos.cfg
 ```
 
-在文件中查找并保证以下每个参数只有一个有效值。把 `<当前hostname>` 替换为 `echo "$TD_HOST"` 的输出：
+在文件中查找并保证以下每个参数只有一个有效值。把 `<当前hostname>` 替换为 `hostnamectl --static` 的输出：
 
 ```ini
 firstEp             <当前hostname>:16030
@@ -569,11 +488,10 @@ journalctl -u taosd -u taosadapter --since '-10 min' --no-pager
 ### 11.1 生成密码
 
 ```bash
-TD_ROOT_PASS="TdE!9$(openssl rand -hex 12)"
-printf '请立即保存到企业密码库：%s\n' "$TD_ROOT_PASS"
+openssl rand -base64 24
 ```
 
-该命令生成至少包含大写、小写、数字和特殊字符的随机密码。不要把输出复制到工单或聊天记录。
+把输出保存到企业密码库，不要写入工单、聊天记录或脚本。
 
 ### 11.2 修改密码
 
@@ -650,7 +568,6 @@ reservedDiskSize = "5GB"
 ```bash
 chown root:root /etc/taos/taoskeeper.toml
 chmod 0600 /etc/taos/taoskeeper.toml
-unset TD_ROOT_PASS
 ```
 
 启动并验证：
@@ -696,19 +613,12 @@ systemctl is-enabled firewalld 2>/dev/null || true
 
 仓库服务器初始化基线默认由安全组、硬件防火墙或统一 ACL 控制，firewalld 通常为关闭状态。此时只需在外层网络边界精确放行业务和监控来源。
 
-如果现场明确启用了 firewalld，填写来源网段后执行：
+如果现场明确启用了 firewalld，把示例网段替换成现场网段后执行：
 
 ```bash
-export APP_CIDR='<业务应用网段，例如10.10.20.0/24>'
-export MONITOR_CIDR='<Prometheus网段，例如10.10.30.0/24>'
-
-case "${APP_CIDR}${MONITOR_CIDR}" in
-  *'<'*) echo 'ERROR: 请先填写 APP_CIDR 和 MONITOR_CIDR'; exit 1 ;;
-esac
-
-firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${APP_CIDR}\" port port=\"16030\" protocol=\"tcp\" accept"
-firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${APP_CIDR}\" port port=\"16041\" protocol=\"tcp\" accept"
-firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${MONITOR_CIDR}\" port port=\"16043\" protocol=\"tcp\" accept"
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.20.0/24" port port="16030" protocol="tcp" accept'
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.20.0/24" port port="16041" protocol="tcp" accept'
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.30.0/24" port port="16043" protocol="tcp" accept'
 firewall-cmd --reload
 firewall-cmd --list-rich-rules
 ```
@@ -745,10 +655,10 @@ SHOW DATABASES;
 ### 14.1 执行一次全量备份
 
 ```bash
-BACKUP_ID="$(date +%F_%H%M%S)"
-BACKUP_DIR="${TD_BACKUP}/${BACKUP_ID}"
+BACKUP_DIR="/backup/tdengine/$(date +%F_%H%M%S)"
 
-install -d -m 0750 -o root -g root "$BACKUP_DIR"
+mkdir -p "$BACKUP_DIR"
+chmod 0750 "$BACKUP_DIR"
 
 taosdump \
   -h 127.0.0.1 \
@@ -765,7 +675,7 @@ taosdump \
 
 ```bash
 (cd "$BACKUP_DIR" && \
-  find . -type f -print0 \
+  find . -type f ! -name SHA256SUMS -print0 \
     | sort -z \
     | xargs -0 sha256sum > SHA256SUMS)
 
@@ -779,29 +689,19 @@ du -sh "$BACKUP_DIR"
 
 ### 14.2 做一次恢复演练
 
-优先恢复到独立测试实例。只能使用当前实例演练时，必须把备份内容恢复成新的隔离库，绝不能覆盖生产库：
+优先恢复到独立测试实例。下面以原库 `prod_iot`、恢复库 `restore_drill_20260713`、备份目录 `/backup/tdengine/2026-07-13_150000` 为例，执行前替换成实际值：
 
 ```bash
-export SOURCE_DB='<原数据库名>'
-export RESTORE_DB="restore_drill_$(date +%Y%m%d)"
-export RESTORE_DIR='<备份目录>'
-
-case "${SOURCE_DB}${RESTORE_DIR}" in
-  *'<'*) echo 'ERROR: 请先填写 SOURCE_DB 和 RESTORE_DIR'; exit 1 ;;
-esac
-
-printf '原库=%s\n恢复演练库=%s\n备份目录=%s\n' \
-  "$SOURCE_DB" "$RESTORE_DB" "$RESTORE_DIR"
-
-(cd "$RESTORE_DIR" && sha256sum -c SHA256SUMS)
+cd /backup/tdengine/2026-07-13_150000
+sha256sum -c SHA256SUMS
 
 taosdump \
-  -i "$RESTORE_DIR" \
+  -i /backup/tdengine/2026-07-13_150000 \
   -h 127.0.0.1 \
   -P 16030 \
   -u root \
   -p \
-  -W "${SOURCE_DB}=${RESTORE_DB}"
+  -W "prod_iot=restore_drill_20260713"
 ```
 
 登录后检查：
@@ -815,7 +715,7 @@ SELECT COUNT(*) FROM <代表性超级表>;
 SELECT MIN(ts), MAX(ts) FROM <代表性超级表>;
 ```
 
-`<恢复库名>` 使用上一步输出的“恢复演练库”，不要填写生产库名。
+`<恢复库名>` 填写新建的恢复演练库，不能填写生产库名。
 
 数据量、时间范围、表结构和代表性查询全部正确，恢复演练才算通过。
 
@@ -992,23 +892,16 @@ SHOW STABLES;
 
 ### 18.2 升级步骤
 
+下面用 `3.4.x.y` 表示经过验证的目标版本，执行前统一替换成实际版本号。
+
 ```bash
-export OLD_VERSION=3.4.1.13
-export NEW_VERSION='<目标版本>'
-export NEW_PARENT="/data/module/tdengine-${NEW_VERSION}"
-export NEW_HOME="${NEW_PARENT}/taos"
-
-case "$NEW_VERSION" in
-  '<'*|'') echo 'ERROR: 请先填写 NEW_VERSION'; exit 1 ;;
-esac
-
 # 先停止业务写入
 systemctl stop taoskeeper taosadapter taosd
 
 # 解压已校验的新包后进入其目录
-cd "/data/soft/tdengine/${NEW_VERSION}/tdengine-tsdb-oss-${NEW_VERSION}"
-install -d -m 0755 -o root -g root "$NEW_PARENT"
-./install.sh -v server -e no -d "$NEW_PARENT"
+cd /data/soft/tdengine/3.4.x.y/tdengine-tsdb-oss-3.4.x.y
+mkdir -p /data/module/tdengine-3.4.x.y
+./install.sh -v server -e no -d /data/module/tdengine-3.4.x.y
 
 # 恢复生产安全基线
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
@@ -1019,11 +912,9 @@ chmod 0750 /var/log/taos
 find /etc/taos -maxdepth 1 -type f -name '*.new' -ls
 
 # 修正当前版本和数据日志软链接
-test -L "$NEW_HOME/data"
-test -L "$NEW_HOME/log"
-ln -sfn "$NEW_HOME" /data/module/tdengine
-ln -sfn /data/tdengine/data "$NEW_HOME/data"
-ln -sfn /data/tdengine/log/taosd "$NEW_HOME/log"
+ln -sfnT /data/module/tdengine-3.4.x.y/taos /data/module/tdengine
+ln -sfnT /data/tdengine/data /data/module/tdengine-3.4.x.y/taos/data
+ln -sfnT /data/tdengine/log/taosd /data/module/tdengine-3.4.x.y/taos/log
 
 # 确认 systemd 已指向新版本
 readlink -f "$(command -v taosd)"
@@ -1044,17 +935,16 @@ taosd -V
 ```bash
 systemctl stop taoskeeper taosadapter taosd
 
-cd "/data/soft/tdengine/${OLD_VERSION}/tdengine-tsdb-oss-${OLD_VERSION}"
-./install.sh -v server -e no -d "/data/module/tdengine-${OLD_VERSION}"
+cd /data/soft/tdengine/3.4.1.13/tdengine-tsdb-oss-3.4.1.13
+./install.sh -v server -e no -d /data/module/tdengine-3.4.1.13
 
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
 systemctl disable taos-explorer
 chmod 0750 /var/log/taos
 
-OLD_HOME="/data/module/tdengine-${OLD_VERSION}/taos"
-ln -sfn "$OLD_HOME" /data/module/tdengine
-ln -sfn /data/tdengine/data "$OLD_HOME/data"
-ln -sfn /data/tdengine/log/taosd "$OLD_HOME/log"
+ln -sfnT /data/module/tdengine-3.4.1.13/taos /data/module/tdengine
+ln -sfnT /data/tdengine/data /data/module/tdengine-3.4.1.13/taos/data
+ln -sfnT /data/tdengine/log/taosd /data/module/tdengine-3.4.1.13/taos/log
 
 systemctl start taosd
 systemctl start taosadapter
@@ -1068,29 +958,19 @@ taosd -V
 
 ---
 
-## 19. 安装方案和 RPM 校验说明
+## 19. 安装结论和 RPM 制品校验
 
-部署方案比较如下。主流程已经选择方案 A，现场无需再次选择。
+本文固定使用官方 Linux-Generic x64 压缩包，不使用 RPM 或 Docker 安装。
 
-| 方案 | 优点 | 缺点 | 结论 |
-|---|---|---|---|
-| A：Generic + 自定义版本目录 | 版本目录清楚，脚本可审计，便于保留旧版本 | 仍会修改系统级链接和 unit | **本文采用** |
-| B：RPM + 本地 Yum | 包管理和依赖记录最好 | 程序路径由 RPM 定义 | 大规模包管理环境可选 |
-| C：RPM 直接安装 | 命令简单 | 依赖需手工处理 | 不推荐作为团队主流程 |
-| D：Docker | 环境封装 | 数据卷、网络和升级链路更复杂 | 已有成熟容器平台时使用 |
-
-如果改用 RPM，必须校验：
+如制品库同时归档 RPM，仅执行以下校验，不套用到本文安装流程：
 
 ```bash
-RPM_FILE=tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
-RPM_MD5=e1ad92cbdcc3d459243e3311e7b259e4
-
-echo "${RPM_MD5}  ${RPM_FILE}" | md5sum -c -
-sha256sum "$RPM_FILE"
-rpm -Kv "$RPM_FILE"
-rpm -qp --qf 'NAME=%{NAME}\nVERSION=%{VERSION}\nRELEASE=%{RELEASE}\nARCH=%{ARCH}\n' "$RPM_FILE"
-rpm -qpR "$RPM_FILE"
-rpm -qlp "$RPM_FILE" | less
+echo 'e1ad92cbdcc3d459243e3311e7b259e4  tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm' | md5sum -c -
+sha256sum tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
+rpm -Kv tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
+rpm -qp --qf 'NAME=%{NAME}\nVERSION=%{VERSION}\nRELEASE=%{RELEASE}\nARCH=%{ARCH}\n' tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
+rpm -qpR tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm
+rpm -qlp tdengine-tsdb-oss-3.4.1.13-linux-x64.rpm | less
 ```
 
 禁止使用 `rpm --nodeps` 强行安装。
