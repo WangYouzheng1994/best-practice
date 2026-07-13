@@ -18,7 +18,7 @@
 - 程序安装到带版本目录 `/data/module/tdengine-3.4.1.13/taos`；
 - 当前版本软链接为 `/data/module/tdengine`；
 - 数据、日志和临时文件放在 `/data/tdengine`；
-- 使用官方端口 `6030`、`6041`、`6043`；
+- 使用团队自定义端口 `16030`、`16041`、`16043`，不使用官方默认端口；
 - 启动 `taosd`、`taosadapter`、`taoskeeper`；
 - 停用 `taos-explorer`；
 - 使用 `taosdump` 做逻辑备份；
@@ -115,7 +115,7 @@ rpm -qa | grep -Ei 'tdengine|taos' || true
 command -v taos taosd taosadapter taoskeeper 2>/dev/null || true
 systemctl list-unit-files | grep -Ei '^taos' || true
 ps -ef | grep -E '[t]aosd|[t]aosadapter|[t]aoskeeper' || true
-ss -lntup | grep -E ':(6030|6041|6043|6044|6045|6046|6047|6048|6049|6060)\b' || true
+ss -lntup | grep -E ':(6030|6041|6043|6060|16030|16041|16043|16044|16045|16046|16047|16048|16049|16060)\b' || true
 find /etc/taos /var/lib/taos /var/log/taos -maxdepth 2 -ls 2>/dev/null
 ```
 
@@ -451,9 +451,9 @@ vim /etc/taos/taos.cfg
 在文件中查找并保证以下每个参数只有一个有效值。把 `<当前hostname>` 替换为 `echo "$TD_HOST"` 的输出：
 
 ```ini
-firstEp             <当前hostname>:6030
+firstEp             <当前hostname>:16030
 fqdn                <当前hostname>
-serverPort          6030
+serverPort          16030
 
 dataDir             /data/tdengine/data
 logDir              /data/tdengine/log/taosd
@@ -468,7 +468,7 @@ numOfLogLines       10000000
 
 monitor             1
 monitorFqdn         <当前hostname>
-monitorPort         6043
+monitorPort         16043
 monitorInterval     30
 ```
 
@@ -498,7 +498,7 @@ vim /etc/taos/taosadapter.toml
 
 ```toml
 debug = false
-port = 6041
+port = 16041
 taosConfigDir = "/etc/taos"
 
 [log]
@@ -512,7 +512,7 @@ reservedDiskSize = "5GB"
 
 [uploadKeeper]
 enable = true
-url = "http://127.0.0.1:6043/adapter_report"
+url = "http://127.0.0.1:16043/adapter_report"
 interval = "15s"
 timeout = "5s"
 retryTimes = 3
@@ -545,14 +545,14 @@ systemctl enable --now taosadapter
 
 systemctl status taosd --no-pager -l
 systemctl status taosadapter --no-pager -l
-ss -lntp | grep -E ':(6030|6041)\b'
+ss -lntp | grep -E ':(16030|16041)\b'
 journalctl -u taosd -u taosadapter --since '-10 min' --no-pager
 ```
 
 必须看到：
 
 - `taosd` 和 `taosadapter` 为 `active (running)`；
-- `6030/TCP`、`6041/TCP` 正在监听；
+- `16030/TCP`、`16041/TCP` 正在监听；
 - 日志没有持续报错。
 
 不要执行 `start-all.sh`。3.4.1.13 的该脚本会同时启动 Explorer。
@@ -573,7 +573,7 @@ printf '请立即保存到企业密码库：%s\n' "$TD_ROOT_PASS"
 ### 11.2 修改密码
 
 ```bash
-taos -h 127.0.0.1 -P 6030 -u root -p
+taos -h 127.0.0.1 -P 16030 -u root -p
 ```
 
 首次输入默认密码：
@@ -592,7 +592,7 @@ QUIT;
 重新登录验证：
 
 ```bash
-taos -h 127.0.0.1 -P 6030 -u root -p
+taos -h 127.0.0.1 -P 16030 -u root -p
 ```
 
 ### 11.3 配置 taosKeeper
@@ -607,12 +607,12 @@ vim /etc/taos/taoskeeper.toml
 ```toml
 instanceId = 64
 host = "127.0.0.1"
-port = 6043
+port = 16043
 RotationInterval = "15s"
 
 [tdengine]
 host = "127.0.0.1"
-port = 6041
+port = 16041
 username = "root"
 password = "<新密码>"
 usessl = false
@@ -653,8 +653,8 @@ unset TD_ROOT_PASS
 ```bash
 systemctl enable --now taoskeeper
 systemctl status taoskeeper --no-pager -l
-curl -fsS http://127.0.0.1:6043/check_health
-curl -fsS 'http://127.0.0.1:6043/metrics/v2?max_age=30' | head
+curl -fsS http://127.0.0.1:16043/check_health
+curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 ```
 
 ---
@@ -665,13 +665,22 @@ curl -fsS 'http://127.0.0.1:6043/metrics/v2?max_age=30' | head
 
 | 端口 | 用途 | 开放范围 |
 |---:|---|---|
-| `6030/TCP` | Native 客户端、taosd | 仅 Native 客户端和运维网，按需开放 |
-| `6041/TCP` | REST/WebSocket、taosAdapter | 业务应用网段 |
-| `6043/TCP` | taosKeeper、Prometheus | 监控网段 |
-| `6044～6049` | 可选采集协议 | 不开放 |
-| `6060/TCP` | Explorer | 不开放，服务保持 disabled |
+| `16030/TCP` | taosd、客户端连接 | 业务应用网段和运维网段 |
+| `16041/TCP` | taosAdapter、应用连接 | 业务应用网段和运维网段 |
+| `16043/TCP` | taosKeeper、Prometheus | 监控网段和运维网段 |
+| `16044～16049` | 可选采集协议预留 | 不开放 |
+| `16060/TCP` | Explorer 预留 | 不开放，服务保持 disabled |
 
 端口已经登记到《服务器端口统一规划规范.md》。数据库端口不得对公网开放。
+
+网络开通申请统一填写：
+
+| 来源 | 目标 | 协议和端口 |
+|---|---|---|
+| 业务应用网段 | `<TDengine服务器内网IP>` | TCP `16030`、`16041` |
+| Prometheus 监控网段 | `<TDengine服务器内网IP>` | TCP `16043` |
+
+不申请官方默认端口，不申请 `16030-16060` 整段端口。
 
 ### 12.2 检查 firewalld
 
@@ -692,13 +701,14 @@ case "${APP_CIDR}${MONITOR_CIDR}" in
   *'<'*) echo 'ERROR: 请先填写 APP_CIDR 和 MONITOR_CIDR'; exit 1 ;;
 esac
 
-firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${APP_CIDR}\" port port=\"6041\" protocol=\"tcp\" accept"
-firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${MONITOR_CIDR}\" port port=\"6043\" protocol=\"tcp\" accept"
+firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${APP_CIDR}\" port port=\"16030\" protocol=\"tcp\" accept"
+firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${APP_CIDR}\" port port=\"16041\" protocol=\"tcp\" accept"
+firewall-cmd --permanent --add-rich-rule="rule family=\"ipv4\" source address=\"${MONITOR_CIDR}\" port port=\"16043\" protocol=\"tcp\" accept"
 firewall-cmd --reload
 firewall-cmd --list-rich-rules
 ```
 
-业务不使用 Native 驱动时，不开放 `6030`。禁止开放 `6030-6060` 整段端口。
+统一申请并精确开放 `16030`、`16041`、`16043`，禁止开放 `16030-16060` 整段端口。官方默认端口 `6030`、`6041`、`6043`、`6060` 不得开放。
 
 ---
 
@@ -707,7 +717,7 @@ firewall-cmd --list-rich-rules
 数据库名、保留天数和 vgroup 数必须来自业务容量评审。登录：
 
 ```bash
-taos -h 127.0.0.1 -P 6030 -u root -p
+taos -h 127.0.0.1 -P 16030 -u root -p
 ```
 
 示例：
@@ -737,7 +747,7 @@ install -d -m 0750 -o root -g root "$BACKUP_DIR"
 
 taosdump \
   -h 127.0.0.1 \
-  -P 6030 \
+  -P 16030 \
   -u root \
   -p \
   -A \
@@ -783,7 +793,7 @@ printf '原库=%s\n恢复演练库=%s\n备份目录=%s\n' \
 taosdump \
   -i "$RESTORE_DIR" \
   -h 127.0.0.1 \
-  -P 6030 \
+  -P 16030 \
   -u root \
   -p \
   -W "${SOURCE_DB}=${RESTORE_DB}"
@@ -817,7 +827,7 @@ scrape_configs:
     params:
       max_age: ["30"]
     static_configs:
-      - targets: ["<TDengine主机IP>:6043"]
+      - targets: ["<TDengine主机IP>:16043"]
 ```
 
 建议告警：
@@ -835,8 +845,8 @@ scrape_configs:
 本机检查：
 
 ```bash
-curl -fsS http://127.0.0.1:6043/check_health
-curl -fsS 'http://127.0.0.1:6043/metrics/v2?max_age=30' | head
+curl -fsS http://127.0.0.1:16043/check_health
+curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 ```
 
 ---
@@ -863,18 +873,19 @@ curl -fsS 'http://127.0.0.1:6043/metrics/v2?max_age=30' | head
 systemctl is-active taosd taosadapter taoskeeper
 systemctl is-enabled taosd taosadapter taoskeeper
 systemctl is-enabled taos-explorer || true
-ss -lntup | grep -E ':(6030|6041|6043|6044|6045|6046|6047|6048|6049|6060)\b'
+ss -lntup | grep -E ':(6030|6041|6043|6060|16030|16041|16043|16044|16045|16046|16047|16048|16049|16060)\b'
 ```
 
 - [ ] taosd、taosadapter、taoskeeper 为 active/enabled；
-- [ ] 仅监听审批通过的 `6030`、`6041`、`6043`；
-- [ ] `6044～6049`、`6060` 未对外开放；
+- [ ] 仅监听审批通过的 `16030`、`16041`、`16043`；
+- [ ] 官方默认端口 `6030`、`6041`、`6043`、`6060` 未监听；
+- [ ] `16044～16049`、`16060` 未对外开放；
 - [ ] 数据库端口未对公网开放。
 
 ### 16.3 读写验证
 
 ```bash
-taos -h 127.0.0.1 -P 6030 -u root -p
+taos -h 127.0.0.1 -P 16030 -u root -p
 ```
 
 ```sql
@@ -943,7 +954,7 @@ iostat -x 1 5
 chronyc tracking
 
 # TDengine
-taos -h 127.0.0.1 -P 6030 -u root -p
+taos -h 127.0.0.1 -P 16030 -u root -p
 ```
 
 常用 SQL：
