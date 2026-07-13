@@ -178,7 +178,16 @@ vim /etc/hosts
 10.10.10.21 semi-idc-huagong-demo01
 ```
 
-不要映射到 `127.0.0.1` 或 `127.0.1.1`，不要使用 `echo >>` 重复追加。
+**硬性要求：TDengine 使用的 hostname 只能解析到服务器真实内网 IP，不能指向 IPv4 回环地址 `127.0.0.1`、`127.0.1.1`，也不能指向 IPv6 回环地址 `::1`。这些地址都只代表当前机器自己。**
+
+如果原文件已经把当前 hostname 写在回环地址后面，必须删除该 hostname，只保留 `localhost` 等系统回环名称。例如下面这种配置是错误的：
+
+```text
+127.0.0.1 semi-idc-huagong-demo01
+::1 semi-idc-huagong-demo01
+```
+
+不要使用 `echo >> /etc/hosts` 重复追加。
 
 保存后验证：
 
@@ -187,9 +196,16 @@ getent ahostsv4 "$TD_HOST"
 getent hosts "$TD_HOST"
 getent ahostsv4 "$TD_HOST" | awk '{print $1}' | grep -Fx "$TD_IP"
 
+if grep -E '^(127\.[0-9.]+|::1)[[:space:]]' /etc/hosts | grep -Fw "$TD_HOST"; then
+  echo "ERROR: $TD_HOST 仍然映射到了回环地址，请修正 /etc/hosts"
+  exit 1
+fi
+
 # 现场允许 ICMP 时执行
 ping -c 3 "$TD_HOST"
 ```
+
+只有 `getent` 返回真实内网 IP，并且回环地址冲突检查没有输出，才能继续部署。
 
 TDengine 初始化完成后，不要直接修改 hostname 或 `fqdn`。
 
