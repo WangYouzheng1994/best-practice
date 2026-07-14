@@ -18,11 +18,11 @@
 - 程序安装到带版本目录 `/data/module/tdengine/3.4.1.13/taos`；
 - 当前版本软链接为 `/data/module/tdengine/current`；
 - 数据、日志和临时文件放在 `/data/module/tdengine`；
-- 使用团队自定义端口 `16030`、`16041`、`16043`，不使用官方默认端口；
-- 启动 `taosd`、`taosadapter`、`taoskeeper`；
-- 停用 `taos-explorer`；
+- 使用团队自定义端口 `16030`、`16041`、`16043`、`16060`，不使用官方默认端口；
+- 启动 `taosd`、`taosadapter`、`taoskeeper`、`taos-explorer`；
+- Explorer 只向运维网段开放；
 - 使用 `taosdump` 做逻辑备份；
-- 使用 taosKeeper `/metrics/v2` 接入 Prometheus。
+- 使用 taosKeeper `/metrics` 接入 Prometheus。
 
 执行约定：
 
@@ -77,10 +77,10 @@ command -v vim wget openssl curl iostat
 
 ```bash
 rpm -qa | grep -Ei 'tdengine|taos' || true
-command -v taos taosd taosadapter taoskeeper 2>/dev/null || true
+command -v taos taosd taosadapter taoskeeper taos-explorer 2>/dev/null || true
 systemctl list-unit-files | grep -Ei '^taos' || true
-ps -ef | grep -E '[t]aosd|[t]aosadapter|[t]aoskeeper' || true
-ss -lntup | grep -E ':(6030|6041|6043|6044|6045|6046|6047|6048|6049|6060|16030|16041|16043)\b' || true
+ps -ef | grep -E '[t]aosd|[t]aosadapter|[t]aoskeeper|[t]aos-explorer' || true
+ss -lntup | grep -E ':(6030|6041|6043|6044|6045|6046|6047|6048|6049|6060|16030|16041|16043|16060)\b' || true
 find /etc/taos /var/lib/taos /var/log/taos -maxdepth 2 -ls 2>/dev/null
 ```
 
@@ -189,17 +189,18 @@ TDengine 初始化完成后，不要直接修改 hostname 或 `fqdn`。
 
 ```bash
 mkdir -p /data/module/tdengine/3.4.1.13/install
-mkdir -p /data/module/tdengine/{data,logs/taosd,logs/adapter,logs/keeper,tmp}
+mkdir -p /data/module/tdengine/{data,explorer/data,logs/taosd,logs/adapter,logs/keeper,logs/explorer,tmp}
 mkdir -p /data/backup/tdengine
 
 chown -R root:root /data/module/tdengine /data/backup/tdengine
 chmod 0755 /data/module/tdengine /data/module/tdengine/3.4.1.13 /data/module/tdengine/3.4.1.13/install
-chmod 0750 /data/module/tdengine/data /data/module/tdengine/logs /data/module/tdengine/logs/* /data/module/tdengine/tmp /data/backup/tdengine
+chmod 0750 /data/module/tdengine/data /data/module/tdengine/explorer /data/module/tdengine/explorer/data /data/module/tdengine/logs /data/module/tdengine/logs/* /data/module/tdengine/tmp /data/backup/tdengine
 
 ls -ld \
   /data/module/tdengine \
   /data/module/tdengine/3.4.1.13/install \
   /data/module/tdengine/data \
+  /data/module/tdengine/explorer/data \
   /data/module/tdengine/logs \
   /data/module/tdengine/tmp \
   /data/backup/tdengine
@@ -216,6 +217,7 @@ ls -ld \
 | `/data/module/tdengine/3.4.1.13/taos` | 程序版本目录 |
 | `/data/module/tdengine/current` | 当前版本软链接 |
 | `/data/module/tdengine/data` | 数据和 WAL |
+| `/data/module/tdengine/explorer/data` | Explorer 本地数据 |
 | `/data/module/tdengine/logs/*` | 各组件日志 |
 | `/data/module/tdengine/tmp` | 临时文件 |
 | `/data/backup/tdengine` | 本机备份暂存 |
@@ -284,11 +286,11 @@ cd /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13
 /data/module/tdengine/3.4.1.13/taos
 ```
 
-预期：安装器显示 `TDengine TSDB has been installed successfully!`，且没有 `error` 或 `failed`。安装器自动启用 Explorer 属于已知行为，下一步立即关闭。
+预期：安装器显示 `TDengine TSDB has been installed successfully!`，且没有 `error` 或 `failed`。安装器会自动启用尚未配置的 Explorer，下一步先将全部服务停下。
 
 ### 7.3 安装后处理
 
-安装器会启用 Explorer，并可能把 `/var/log/taos` 权限设置为 `777`，立即处理：
+安装器会启用 Explorer，并可能把 `/var/log/taos` 权限设置为 `777`。先停止全部服务，Explorer 配置完成前暂时禁止开机启动：
 
 ```bash
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
@@ -343,7 +345,7 @@ systemctl cat taosadapter | grep '^ExecStart='
 systemctl cat taoskeeper | grep '^ExecStart='
 systemctl is-enabled taosd taosadapter taoskeeper
 systemctl is-enabled taos-explorer || true
-systemctl is-active taosd taosadapter taoskeeper || true
+systemctl is-active taosd taosadapter taoskeeper taos-explorer || true
 ```
 
 首次安装时，本节命令全部必须执行：
@@ -360,9 +362,9 @@ systemctl is-active taosd taosadapter taoskeeper || true
 | `systemctl cat taosd \| grep '^ExecStart='` | 检查 taosd 的 systemd 启动命令 | `ExecStart` 指向 `/data/module/tdengine/3.4.1.13/taos/bin/taosd`，配置文件为 `/etc/taos/taos.cfg` |
 | `systemctl cat taosadapter \| grep '^ExecStart='` | 检查 taosAdapter 的 systemd 启动命令 | `ExecStart` 指向 `/data/module/tdengine/3.4.1.13/taos/bin/taosadapter`，配置文件为 `/etc/taos/taosadapter.toml` |
 | `systemctl cat taoskeeper \| grep '^ExecStart='` | 检查 taosKeeper 的 systemd 启动命令 | `ExecStart` 指向 `/data/module/tdengine/3.4.1.13/taos/bin/taoskeeper`，配置文件为 `/etc/taos/taoskeeper.toml` |
-| `systemctl is-enabled taosd taosadapter taoskeeper` | 检查三个生产服务是否开机启动 | 连续输出三行 `enabled` |
+| `systemctl is-enabled taosd taosadapter taoskeeper` | 检查三个基础服务是否开机启动 | 连续输出三行 `enabled` |
 | `systemctl is-enabled taos-explorer \|\| true` | 确认 Explorer 已禁止开机启动 | 输出 `disabled` |
-| `systemctl is-active taosd taosadapter taoskeeper \|\| true` | 确认配置完成前服务没有提前启动 | 连续输出三行 `inactive` |
+| `systemctl is-active taosd taosadapter taoskeeper taos-explorer \|\| true` | 确认配置完成前服务没有提前启动 | 连续输出四行 `inactive` |
 
 `disabled` 和 `inactive` 在 systemd 中会返回非零状态，因此命令末尾使用 `|| true`；这里的输出符合预期，不代表执行失败。
 
@@ -405,6 +407,17 @@ which taos taosd taosdump
 ```
 
 systemd 使用绝对 `ExecStart`，不依赖交互式 Shell 环境变量。
+
+### 7.6 服务及功能
+
+| 服务 | 功能 | 配置文件 | 端口 | 启动条件 |
+|---|---|---|---:|---|
+| `taosd` | TDengine 核心数据库服务，负责用户认证、数据写入、存储和查询 | `/etc/taos/taos.cfg` | `16030` | 必须最先启动；启动后才能登录并修改密码 |
+| `taosadapter` | REST 和 WebSocket 网关，把应用请求转给 `taosd` | `/etc/taos/taosadapter.toml` | `16041` | 不保存固定的 root 密码，`taosd` 启动后即可启动 |
+| `taoskeeper` | 使用数据库账号连接 TDengine，接收监控指标并写入监控数据库 | `/etc/taos/taoskeeper.toml` | `16043` | 必须先修改 root 密码，再把新密码写入配置文件 |
+| `taos-explorer` | Web 管理界面，通过 `taosadapter` 访问 TDengine | `/etc/taos/explorer.toml` | `16060` | 修改默认密码后启动，只向运维网段开放 |
+
+启动顺序：`taosd` → `taosadapter` → 修改数据库密码并配置 `taoskeeper` → `taoskeeper` → `taos-explorer`。
 
 ---
 
@@ -458,7 +471,9 @@ grep -niE '^(firstEp|fqdn|serverPort|dataDir|logDir|tempDir|minimalDataDirGB|min
 
 ---
 
-## 9. 配置 taosAdapter
+## 9. 配置 taosAdapter 和 taosExplorer
+
+### 9.1 配置 taosAdapter
 
 备份并编辑：
 
@@ -517,11 +532,64 @@ enable = false
 enable = false
 ```
 
-以上是 taosAdapter 的协议入口，未经过业务评审不得启用；不影响 taosKeeper 的 `/metrics/v2`。不要追加包内不存在的配置段，只修改实际文件中已有参数。
+以上是 taosAdapter 的协议入口，未经过业务评审不得启用；不影响 taosKeeper 的 `/metrics`。不要追加包内不存在的配置段，只修改实际文件中已有参数。
+
+### 9.2 配置 taosExplorer
+
+Explorer 是随安装包提供的 Web 管理界面，通过本机 taosAdapter 访问 TDengine。备份并编辑：
+
+```bash
+cp -a /etc/taos/explorer.toml "/etc/taos/explorer.toml.$(date +%F_%H%M%S).bak"
+vim /etc/taos/explorer.toml
+```
+
+确认或修改以下参数，把 `<当前hostname>` 替换为 `hostnamectl --static` 的输出：
+
+```toml
+port = 16060
+addr = "0.0.0.0"
+data_dir = "/data/module/tdengine/explorer/data"
+cluster = "http://<当前hostname>:16041"
+cors = true
+
+[log]
+path = "/data/module/tdengine/logs/explorer"
+level = "info"
+compress = true
+rotationCount = 30
+rotationSize = "1GB"
+reservedDiskSize = "5GB"
+keepDays = 30
+
+[monitor]
+fqdn = "<当前hostname>"
+port = 16043
+interval = 10
+```
+
+按团队约定，Explorer 使用 hostname 连接 taosAdapter 和 taosKeeper，并开启 CORS。taosAdapter 的 `allowAllOrigins` 仍保持 `false`。
+
+> **端口备注：** Explorer 监听 `0.0.0.0:16060`，由服务器外层防火墙、网络 ACL 或安全设备限制为仅运维网段可访问；本手册不要求为此单独启用本机 firewalld。
+
+跳过产品注册，直接使用 TDengine 数据库账号登录：
+
+```bash
+vim /etc/default/taos-explorer
+```
+
+写入：
+
+```text
+EXPLORER_SKIP_REGISTER=true
+```
+
+该参数只跳过 Explorer 产品注册，不会跳过 TDengine 数据库账号认证。
 
 ---
 
 ## 10. 启动 taosd 和 taosAdapter
+
+本节只启动前两个服务：先用 `taosd` 完成数据库初始化和密码修改；`taosadapter` 不需要预先保存 root 密码，可以同时投入本机验证。`taoskeeper` 必须使用有效的数据库账号和密码连接 TDengine，因此留到第 11 节配置完成后启动。
 
 ```bash
 systemctl daemon-reload
@@ -531,7 +599,7 @@ systemctl enable --now taosadapter
 systemctl status taosd --no-pager -l
 systemctl status taosadapter --no-pager -l
 ss -lntp | grep -E ':(16030|16041)\b'
-curl -fsS http://127.0.0.1:16041/-/ping
+curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://127.0.0.1:16041/-/ping
 journalctl -u taosd -u taosadapter --since '-10 min' --no-pager
 ```
 
@@ -539,15 +607,27 @@ journalctl -u taosd -u taosadapter --since '-10 min' --no-pager
 
 - `taosd` 和 `taosadapter` 为 `active (running)`；
 - `16030/TCP`、`16041/TCP` 正在监听；
+- 健康检查输出 `HTTP 200`；
 - 日志没有持续报错。
 
-不要执行 `start-all.sh`。3.4.1.13 的该脚本会同时启动 Explorer。
+不要执行 `start-all.sh`。它会跳过本手册的分阶段启动顺序，使 Explorer 在默认密码修改前启动，也无法保证 `taoskeeper` 已经写入新密码。这里逐个使用 `systemctl`。
 
 ---
 
-## 11. 修改 root 密码并启动 taosKeeper
+## 11. 修改默认 root 密码并启动 taosKeeper、taosExplorer
 
-### 11.1 生成密码
+### 11.1 准备 root 新密码
+
+TDengine 初始管理员账号为 `root`，默认密码 `taosdata` 是公开信息，生产环境必须在开放业务端口前修改。下面的命令只生成一段随机密码，并不会修改 TDengine；生成结果将在 11.2 节设置给 root，并在 11.3 节写入 `taoskeeper` 配置。
+
+同一个新密码需要完成两个不同动作：
+
+| 动作 | 作用 |
+|---|---|
+| 执行 `ALTER USER root PASS` | 修改 TDengine 数据库中 root 账号真正认可的密码 |
+| 写入 `taoskeeper.toml` | 告诉 taosKeeper 后台启动时使用哪个密码登录 TDengine |
+
+只修改其中一处都会导致密码不一致：只写配置文件，数据库仍只认可旧密码；只执行 `ALTER USER`，taosKeeper 不知道新密码。
 
 ```bash
 openssl rand -base64 24
@@ -587,7 +667,7 @@ cp -a /etc/taos/taoskeeper.toml "/etc/taos/taoskeeper.toml.$(date +%F_%H%M%S).ba
 vim /etc/taos/taoskeeper.toml
 ```
 
-配置：
+安装器通常已经把 `[tdengine]` 下的 `host` 写成当前 hostname；值正确时直接保留，不要改成 `127.0.0.1`。下面的 `<当前hostname>` 表示 `hostnamectl --static` 的输出：
 
 ```toml
 instanceId = 64
@@ -596,7 +676,7 @@ port = 16043
 RotationInterval = "15s"
 
 [tdengine]
-host = "127.0.0.1"
+host = "<当前hostname>"
 port = 16041
 username = "root"
 password = "<新密码>"
@@ -611,10 +691,6 @@ buffer = 64
 keep = 90
 cachemodel = "both"
 
-[prometheus]
-includeTables = []
-cacheTTL = 300
-
 [log]
 path = "/data/module/tdengine/logs/keeper"
 level = "info"
@@ -625,7 +701,9 @@ compress = true
 reservedDiskSize = "5GB"
 ```
 
-`host = "0.0.0.0"` 用于允许 Prometheus 从监控网段访问，`16043` 必须由网络 ACL 或 firewalld 仅对白名单开放。
+`password = "<新密码>"` 必须在 `vim` 中替换为刚刚设置给 root 的真实密码，不能保留占位符。taosKeeper 是 TDengine 客户端，需要保存可用于自动登录的密码；不要把密码写进 Shell 命令、脚本、Git 或工单。
+
+顶层 `host = "0.0.0.0"` 是 taosKeeper 自己的监听地址；`[tdengine]` 下的 `host = "<当前hostname>"` 是 taosKeeper 访问 taosAdapter 的目标地址，两者不能混用。`16043` 由外层防火墙或网络 ACL 仅向监控网段和运维网段开放。
 
 限制配置文件权限：
 
@@ -641,8 +719,21 @@ systemctl enable --now taoskeeper
 systemctl status taoskeeper --no-pager -l
 ss -lntp | grep ':16043\b'
 curl -fsS http://127.0.0.1:16043/check_health
-curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
+curl -fsS http://127.0.0.1:16043/metrics | sed -n '1,30p'
 ```
+
+必须看到 taosKeeper 为 `active (running)`、`16043/TCP` 正在监听、健康检查返回 `3.4.1.13`，并且指标输出包含 `# HELP`、`# TYPE` 等 Prometheus 格式内容。
+
+### 11.4 启动 taosExplorer
+
+```bash
+systemctl enable --now taos-explorer
+systemctl status taos-explorer --no-pager -l
+ss -lntp | grep ':16060\b'
+curl -sS -o /dev/null -w 'HTTP %{http_code}\n' http://127.0.0.1:16060/
+```
+
+必须看到 Explorer 为 `active (running)`、`16060/TCP` 正在监听、健康检查输出 `HTTP 200`。浏览器通过 `http://<TDengine服务器内网IP>:16060` 访问，使用 TDengine 数据库账号和已经修改的新密码登录。
 
 ---
 
@@ -655,6 +746,7 @@ curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 | `16030/TCP` | taosd、客户端连接 | 业务应用网段和运维网段 |
 | `16041/TCP` | taosAdapter、应用连接 | 业务应用网段和运维网段 |
 | `16043/TCP` | taosKeeper、Prometheus | 监控网段和运维网段 |
+| `16060/TCP` | taosExplorer 管理界面 | 仅运维网段 |
 
 端口已经登记到《服务器端口统一规划规范.md》。数据库端口不得对公网开放。
 
@@ -664,6 +756,7 @@ curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 |---|---|---|
 | 业务应用网段 | `<TDengine服务器内网IP>` | TCP `16030`、`16041` |
 | Prometheus 监控网段 | `<TDengine服务器内网IP>` | TCP `16043` |
+| 运维网段 | `<TDengine服务器内网IP>` | TCP `16060` |
 
 不申请官方默认端口，不申请 `16030-16060` 整段端口。
 
@@ -674,7 +767,7 @@ systemctl is-active firewalld 2>/dev/null || true
 systemctl is-enabled firewalld 2>/dev/null || true
 ```
 
-仓库服务器初始化基线默认由安全组、硬件防火墙或统一 ACL 控制，firewalld 通常为关闭状态。此时只需在外层网络边界精确放行业务和监控来源。
+仓库服务器初始化基线默认由外层防火墙、硬件防火墙或统一 ACL 控制，firewalld 通常为关闭状态。此时只需在外层网络边界精确放行业务、监控和运维来源；其中 `16060` 仅允许运维网段访问，不需要为 TDengine 单独启用本机 firewalld。
 
 如果现场明确启用了 firewalld，把示例网段替换成现场网段后执行：
 
@@ -682,11 +775,12 @@ systemctl is-enabled firewalld 2>/dev/null || true
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.20.0/24" port port="16030" protocol="tcp" accept'
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.20.0/24" port port="16041" protocol="tcp" accept'
 firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.30.0/24" port port="16043" protocol="tcp" accept'
+firewall-cmd --permanent --add-rich-rule='rule family="ipv4" source address="10.10.40.0/24" port port="16060" protocol="tcp" accept'
 firewall-cmd --reload
 firewall-cmd --list-rich-rules
 ```
 
-统一申请并精确开放 `16030`、`16041`、`16043`，禁止开放 `16030-16060` 整段端口。官方默认端口 `6030`、`6041`、`6043`、`6060` 不得开放。
+统一申请并精确开放 `16030`、`16041`、`16043`、`16060`，禁止开放 `16030-16060` 整段端口。官方默认端口 `6030`、`6041`、`6043`、`6060` 不得开放。
 
 ---
 
@@ -792,12 +886,12 @@ Prometheus 增加：
 ```yaml
 scrape_configs:
   - job_name: "tdengine-single"
-    metrics_path: "/metrics/v2"
-    params:
-      max_age: ["30"]
+    metrics_path: "/metrics"
     static_configs:
       - targets: ["<TDengine主机IP>:16043"]
 ```
+
+TDengine 3.4.1 总版本文档同时描述了 `/metrics/v2`，但本文目标包 `3.4.1.13` 实测该路径返回 `404`，因此单体部署固定使用 `/metrics`。
 
 建议告警：
 
@@ -815,7 +909,7 @@ scrape_configs:
 
 ```bash
 curl -fsS http://127.0.0.1:16043/check_health
-curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
+curl -fsS http://127.0.0.1:16043/metrics | sed -n '1,30p'
 ```
 
 ---
@@ -830,7 +924,7 @@ curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 - [ ] 程序位于 `/data/module/tdengine/3.4.1.13/taos`；
 - [ ] `/data/module/tdengine/current` 指向当前版本；
 - [ ] data/log/tmp 位于 `/data/module/tdengine`；
-- [ ] `taos-explorer` 为 disabled；
+- [ ] Explorer 数据和日志位于 `/data/module/tdengine`；
 - [ ] `/var/log/taos` 不是 `777`；
 - [ ] `taos.cfg` 没有重复参数；
 - [ ] root 默认密码已经修改；
@@ -839,15 +933,17 @@ curl -fsS 'http://127.0.0.1:16043/metrics/v2?max_age=30' | head
 ### 16.2 服务和端口
 
 ```bash
-systemctl is-active taosd taosadapter taoskeeper
-systemctl is-enabled taosd taosadapter taoskeeper
-systemctl is-enabled taos-explorer || true
-ss -lntup | grep -E ':(6030|6041|6043|6044|6045|6046|6047|6048|6049|6060|16030|16041|16043)\b'
+systemctl is-active taosd taosadapter taoskeeper taos-explorer
+systemctl is-enabled taosd taosadapter taoskeeper taos-explorer
+ss -lntup | grep -E ':(6030|6041|6043|6044|6045|6046|6047|6048|6049|6060|16030|16041|16043|16060)\b'
 ```
 
-- [ ] taosd、taosadapter、taoskeeper 为 active/enabled；
-- [ ] 仅监听审批通过的 `16030`、`16041`、`16043`；
+- [ ] taosd、taosadapter、taoskeeper、taos-explorer 为 active/enabled；
+- [ ] 仅监听审批通过的 `16030`、`16041`、`16043`、`16060`；
 - [ ] 官方默认端口 `6030`、`6041`、`6043～6049`、`6060` 未监听；
+- [ ] `16060` 仅允许运维网段访问；
+- [ ] 运维网浏览器可以打开 Explorer，并使用修改后的 TDengine 账号密码登录；
+- [ ] 非运维网段不能访问 `16060`；
 - [ ] 数据库端口未对公网开放。
 
 ### 16.3 读写验证
@@ -899,7 +995,8 @@ DROP DATABASE verify_tdengine;
 systemctl restart taosd
 systemctl restart taosadapter
 systemctl restart taoskeeper
-systemctl is-active taosd taosadapter taoskeeper
+systemctl restart taos-explorer
+systemctl is-active taosd taosadapter taoskeeper taos-explorer
 ```
 
 条件允许时完成一次操作系统重启，确认数据盘挂载、服务、端口、数据和监控全部恢复。
@@ -910,14 +1007,15 @@ systemctl is-active taosd taosadapter taoskeeper
 
 ```bash
 # 服务
-systemctl status taosd taosadapter taoskeeper --no-pager
+systemctl status taosd taosadapter taoskeeper taos-explorer --no-pager
 journalctl -u taosd --since '-30 min' --no-pager
 journalctl -u taosadapter --since '-30 min' --no-pager
 journalctl -u taoskeeper --since '-30 min' --no-pager
+journalctl -u taos-explorer --since '-30 min' --no-pager
 
 # 资源
 df -hT /data
-du -sh /data/module/tdengine/data /data/module/tdengine/logs/* /data/module/tdengine/tmp
+du -sh /data/module/tdengine/data /data/module/tdengine/explorer /data/module/tdengine/logs/* /data/module/tdengine/tmp
 iostat -x 1 5
 chronyc tracking
 
@@ -936,9 +1034,9 @@ USE log;
 SHOW STABLES;
 ```
 
-停止顺序：先停止业务写入，再停止 Keeper、Adapter、taosd。
+停止顺序：先停止业务写入，再停止 Explorer、Keeper、Adapter、taosd。
 
-启动顺序：taosd、Adapter、Keeper，验证通过后恢复业务写入。
+启动顺序：taosd、Adapter、Keeper、Explorer，验证通过后恢复业务写入。
 
 ---
 
@@ -959,7 +1057,7 @@ SHOW STABLES;
 
 ```bash
 # 先停止业务写入
-systemctl stop taoskeeper taosadapter taosd
+systemctl stop taos-explorer taoskeeper taosadapter taosd
 
 # 解压已校验的新包后进入其目录
 mkdir -p /data/module/tdengine/3.4.x.y/install
@@ -969,9 +1067,8 @@ cd /data/module/tdengine/3.4.x.y/install/tdengine-tsdb-oss-3.4.x.y
 /data/module/tdengine/3.4.x.y/install/tdengine-tsdb-oss-3.4.x.y/install.sh \
   -v server -e no -d /data/module/tdengine/3.4.x.y
 
-# 恢复生产安全基线
+# 恢复生产安全基线并阻止安装器提前启动服务
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
-systemctl disable taos-explorer
 chmod 0750 /var/log/taos
 
 # 检查新配置模板，人工合并需要的新增项
@@ -989,6 +1086,7 @@ systemctl cat taosd | grep '^ExecStart='
 systemctl start taosd
 systemctl start taosadapter
 systemctl start taoskeeper
+systemctl start taos-explorer
 taosd -V
 ```
 
@@ -999,14 +1097,13 @@ taosd -V
 只有官方确认可逆的同一 Maintenance 系列，才允许尝试原目录回滚：
 
 ```bash
-systemctl stop taoskeeper taosadapter taosd
+systemctl stop taos-explorer taoskeeper taosadapter taosd
 
 cd /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13
 /data/module/tdengine/3.4.1.13/install/tdengine-tsdb-oss-3.4.1.13/install.sh \
   -v server -e no -d /data/module/tdengine/3.4.1.13
 
 systemctl stop taos-explorer taoskeeper taosadapter taosd 2>/dev/null || true
-systemctl disable taos-explorer
 chmod 0750 /var/log/taos
 
 ln -sfnT /data/module/tdengine/data /data/module/tdengine/3.4.1.13/taos/data
@@ -1016,6 +1113,7 @@ ln -sfnT /data/module/tdengine/3.4.1.13/taos /data/module/tdengine/current
 systemctl start taosd
 systemctl start taosadapter
 systemctl start taoskeeper
+systemctl start taos-explorer
 taosd -V
 ```
 
@@ -1032,9 +1130,9 @@ taosd -V
 | 单体是单点，主机故障即服务中断 | 明确 SLA、异机备份；需要高可用时编制集群方案 |
 | CentOS 7 已 EOL | 严格网络隔离并制定操作系统迁移计划 |
 | 3.4.1 未被官网标注为 LTS | 预生产验证、压测、恢复演练；后续评估 LTS/新维护版本 |
-| 3.4.1.13 发布说明链接当前失效 | 上线前向官方或社区补齐变更和已知缺陷信息 |
 | Generic 安装器修改系统路径 | 保留安装前后记录，使用带版本目录，升级后检查全局链接和 unit |
-| CentOS 7 下服务默认以 root 运行 | 最小端口、网络白名单、严格配置权限、停用 Explorer |
+| CentOS 7 下服务默认以 root 运行 | 最小端口、网络白名单、严格配置权限；Explorer 仅向运维网段开放 |
+| Explorer 随 OSS 包免费提供但本身不开源，且可以执行数据库管理操作 | 仅运维网访问，修改默认密码后启动，使用数据库账号登录，不对公网开放 |
 | Keeper 配置保存数据库密码 | 文件权限 `0600`，密码只存企业密码库 |
 | OSS 没有持续增量和 PITR | 全量/分段备份、异机复制、定期恢复演练 |
 | 磁盘写满 | 70%/80% 告警、预留 30%、提前扩容 |
@@ -1047,7 +1145,7 @@ taosd -V
 
 ## 20. 官方参考资料
 
-以下资料于 2026-07-13 重新核验：
+以下资料于 2026-07-14 重新核验：
 
 1. [TDengine Download Center](https://tdengine.com/downloads/)
 2. [TDengine 3.4.1 Supported Platforms](https://docs.tdengine.com/3.4.1/reference/supported/)
@@ -1056,11 +1154,13 @@ taosd -V
 5. [taosd Reference](https://docs.tdengine.com/3.4.1/reference/components/taosd/)
 6. [taosAdapter Reference](https://docs.tdengine.com/3.4.1/reference/components/taosadapter/)
 7. [taosKeeper Reference](https://docs.tdengine.com/3.4.1/reference/components/taoskeeper/)
-8. [Data Backup and Restoration](https://docs.tdengine.com/3.4.1/operation/backup/)
-9. [taosdump Reference](https://docs.tdengine.com/3.4.1/reference/tools/taosdump/)
-10. [Users and Permissions](https://docs.tdengine.com/3.4.1/operation/user/)
-11. [TDengine Release History](https://docs.tdengine.com/3.4.1/releases/)
-12. [Manual Deployment](https://docs.tdengine.com/3.4.1/operation/deployment/manual/)
-13. [TDengine 3.4.1.13 Linux-Generic x64 官方包](https://downloads.taosdata.com/tdengine-tsdb-oss/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz)
+8. [taosExplorer Reference](https://docs.tdengine.com/3.4.1/reference/components/explorer/)
+9. [Data Backup and Restoration](https://docs.tdengine.com/3.4.1/operation/backup/)
+10. [taosdump Reference](https://docs.tdengine.com/3.4.1/reference/tools/taosdump/)
+11. [Users and Permissions](https://docs.tdengine.com/3.4.1/operation/user/)
+12. [TDengine 3.4.1.13 Release Notes](https://docs.tdengine.com/releases/notes/3.4.1.13/)
+13. [TDengine Release History](https://docs.tdengine.com/3.4.1/releases/)
+14. [Manual Deployment](https://docs.tdengine.com/3.4.1/operation/deployment/manual/)
+15. [TDengine 3.4.1.13 Linux-Generic x64 官方包](https://downloads.taosdata.com/tdengine-tsdb-oss/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz)
 
 每次安装或升级仍需重新核验目标版本下载页、兼容矩阵、发布说明和备份恢复限制。
