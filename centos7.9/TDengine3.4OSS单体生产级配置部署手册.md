@@ -419,6 +419,26 @@ systemd 使用绝对 `ExecStart`，不依赖交互式 Shell 环境变量。
 
 启动顺序：`taosd` → `taosadapter` → 修改数据库密码并配置 `taoskeeper` → `taoskeeper` → `taos-explorer`。
 
+Java 应用连接端口：
+
+| 端口 | Java 用途 | 连接方式 |
+|---:|---|---|
+| `16030` | Native JDBC | `jdbc:TAOS://<TDengine hostname>:16030/<数据库名>`，驱动类为 `com.taosdata.jdbc.TSDBDriver`；应用服务器必须安装 TDengine 原生客户端库 |
+| `16041` | JDBC WebSocket，生产推荐 | `jdbc:TAOS-WS://<TDengine hostname>:16041/<数据库名>`，驱动类为 `com.taosdata.jdbc.ws.WebSocketDriver`；应用服务器不需要安装 TDengine 原生客户端库 |
+| `16043` | taosKeeper 健康检查和 Prometheus 指标 | 不是 JDBC 端口；Java 业务应用不连接 |
+| `16060` | taosExplorer 管理页面 | 不是 JDBC 端口；使用浏览器访问 |
+
+Java 业务应用统一推荐使用 `16041`。Spring Boot 示例：
+
+```properties
+spring.datasource.url=jdbc:TAOS-WS://<TDengine hostname>:16041/<数据库名>
+spring.datasource.username=<用户名>
+spring.datasource.password=<密码>
+spring.datasource.driver-class-name=com.taosdata.jdbc.ws.WebSocketDriver
+```
+
+账号密码分别放在应用配置的用户名和密码字段中，不要拼进 JDBC URL。
+
 ---
 
 ## 8. 配置 taosd
@@ -1162,5 +1182,6 @@ taosd -V
 13. [TDengine Release History](https://docs.tdengine.com/3.4.1/releases/)
 14. [Manual Deployment](https://docs.tdengine.com/3.4.1/operation/deployment/manual/)
 15. [TDengine 3.4.1.13 Linux-Generic x64 官方包](https://downloads.taosdata.com/tdengine-tsdb-oss/3.4.1.13/tdengine-tsdb-oss-3.4.1.13-linux-x64.tar.gz)
+16. [Java Connector](https://docs.tdengine.com/3.4.1/reference/connector/java/)
 
 每次安装或升级仍需重新核验目标版本下载页、兼容矩阵、发布说明和备份恢复限制。
