@@ -1,7 +1,7 @@
 # CentOS 7.9 生产服务器初始化手册
 
 > **Author:** 王有政
-> **日期:** 2026-06-15
+> **日期:** 2026-07-15
 > **适用系统:** CentOS 7.9 (x86_64)
 > **说明:** 本文档按优先级与配置依赖排序，每一步均可独立执行并验证，避免一键脚本中途失败无法定位问题。
 
@@ -9,53 +9,34 @@
 
 ## 目录
 
-### 前置检查
-
 1. [硬件与系统信息确认](#1-硬件与系统信息确认)
-
-### 系统基础（P0）
-
-1. [Yum 镜像源配置](#2-yum-镜像源配置)
-2. [基础工具安装](#3-基础工具安装)
-3. [系统补丁更新](#4-系统补丁更新)
-4. [Hostname 与 hosts 配置](#5-hostname-与-hosts-配置)
-5. [时区与时间同步](#6-时区与时间同步)
-6. [关闭不必要服务](#7-关闭不必要服务)
-
-### 安全加固（P0 · 生产最高优先级）
-
-1. [用户与密码策略加固](#8-用户与密码策略加固)
-2. [SSH 安全加固](#9-ssh-安全加固)
-3. [SELinux 配置](#10-selinux-配置)
-4. [主机防火墙基线](#11-主机防火墙基线)
-5. [fail2ban 防暴力破解](#12-fail2ban-防暴力破解)
-6. [/tmp 分区加固](#13-tmp-分区加固)
-7. [auditd 审计日志](#14-auditd-审计日志)
-
-### 内核与性能调优（P1 · 高优先级）
-
-1. [Swap 与内存管理](#15-swap-与内存管理)
-2. [Transparent Huge Pages (THP) 配置](#16-transparent-huge-pages-thp-配置)
-3. [挂载参数优化](#17-挂载参数优化)
-4. [磁盘 I/O 调度器配置](#18-磁盘-io-调度器配置)
-5. [内核参数优化 (sysctl)](#19-内核参数优化-sysctl)
-6. [文件句柄数限制](#20-文件句柄数限制)
-7. [网络接口优化](#21-网络接口优化)
-8. [SysRq 紧急调试开关](#22-sysrq-紧急调试开关)
-
-### 运行环境（P2 · 中优先级）
-
-1. [JDK 安装与环境变量设置](#23-jdk-安装与环境变量设置)
-2. [常用诊断工具安装](#24-常用诊断工具安装)
-3. [Docker 安装与配置](#25-docker-安装与配置)
-4. [日志配置](#26-日志配置)
-5. [Core Dump 配置](#27-core-dump-配置)
-
-### 验收
-
-1. [最终验证清单](#28-最终验证清单)
-
----
+2. [Yum 镜像源配置](#2-yum-镜像源配置)
+3. [基础工具安装](#3-基础工具安装)
+4. [系统补丁更新](#4-系统补丁更新)
+5. [Hostname 与 hosts 配置](#5-hostname-与-hosts-配置)
+6. [时区与时间同步](#6-时区与时间同步)
+7. [关闭不必要服务](#7-关闭不必要服务)
+8. [用户与密码策略加固](#8-用户与密码策略加固)
+9. [SSH 安全加固](#9-ssh-安全加固)
+10. [SELinux 配置](#10-selinux-配置)
+11. [主机防火墙基线](#11-主机防火墙基线)
+12. [fail2ban 防暴力破解](#12-fail2ban-防暴力破解)
+13. [/tmp 分区加固](#13-tmp-分区加固)
+14. [auditd 审计日志](#14-auditd-审计日志)
+15. [Swap 与内存管理](#15-swap-与内存管理)
+16. [Transparent Huge Pages (THP) 配置](#16-transparent-huge-pages-thp-配置)
+17. [挂载参数优化](#17-挂载参数优化)
+18. [磁盘 I/O 调度器配置](#18-磁盘-io-调度器配置)
+19. [内核参数优化 (sysctl)](#19-内核参数优化-sysctl)
+20. [文件句柄数限制](#20-文件句柄数限制)
+21. [网络接口优化](#21-网络接口优化)
+22. [SysRq 紧急调试开关](#22-sysrq-紧急调试开关)
+23. [JDK 安装与环境变量设置](#23-jdk-安装与环境变量设置)
+24. [Maven 安装与环境变量设置](#24-maven-安装与环境变量设置)
+25. [常用诊断工具安装](#25-常用诊断工具安装)
+26. [Docker 安装与配置](#26-docker-安装与配置)
+27. [日志配置](#27-日志配置)
+28. [Core Dump 配置](#28-core-dump-配置)
 
 ## 1. 硬件与系统信息确认
 
@@ -96,17 +77,11 @@ ping -c 10 -i 0.2 223.5.5.5 | tail -2
 # Ctrl+C 手动停止，观察平均下载速度
 curl -o /dev/null -w "下载速度: %{speed_download} bytes/s\n" https://mirrors.aliyun.com/centos/7/os/x86_64/repodata/repomd.xml
 
-# 上行带宽测试（需对端有接收服务，满足条件时执行）
-# 方案A: iperf3（需对端运行 iperf3 -s）
+# 上行带宽测试（需对端运行 iperf3 -s）
 # iperf3 -c <对端IP> -t 10 -P 4
-#
-# 方案B: scp 大文件到对端服务器
-# dd if=/dev/zero of=/tmp/test_upload bs=1M count=100
-# scp /tmp/test_upload user@<对端IP>:/tmp/
-# rm -f /tmp/test_upload
 ```
 
-**验收标准：**
+**资源基线：**
 
 
 | 项目       | 最低要求       | 推荐配置       |
@@ -576,19 +551,6 @@ systemctl reload sshd
 
 > **警告：** `Ciphers`、`MACs`、`KexAlgorithms` 不建议默认收得过窄，老堡垒机、SFTP 工具、自动化客户端可能不兼容。需要合规加固时，应先盘点所有 SSH 客户端能力，再逐步收敛算法。
 
-### 9.2 关键参数说明（兼顾自动化场景）
-
-
-| 参数                    | 值           | 说明                                                     |
-| --------------------- | ----------- | ------------------------------------------------------ |
-| `MaxSessions`         | 100         | 已认证最大并发会话数（DataX 40路 + Hive 10路 + 人工5路 + 余量45）         |
-| `MaxStartups`         | 100:150:200 | 握手阶段并发限制，前100个不拒绝                                      |
-| `ClientAliveCountMax` | 6           | 配合 `ClientAliveInterval 300` 可容忍单连接30分钟无数据，Hive长查询不会断连 |
-| `TCPKeepAlive`        | yes         | 操作系统层面保活，防止中间防火墙/NAT设备切断空闲连接                           |
-| `MaxAuthTries`        | 6           | 多密钥环境下允许更多次尝试（自动化的机器可能持有多把密钥轮试）                        |
-| `LoginGraceTime`      | 90          | 给自动化脚本留够认证时间，避免偶发超时                                    |
-
-
 ### 9.3 创建自动化运维专用账号
 
 ```bash
@@ -732,15 +694,10 @@ fail2ban-client status sshd
 **目的：** 限制 /tmp 分区权限，防止恶意脚本执行。
 
 ```bash
-# 方案A：将 /tmp 挂载为独立 tmpfs（推荐，重启自动清理）
+# 将 /tmp 挂载为独立 tmpfs，重启后自动清理
 cat >> /etc/fstab << 'EOF'
 tmpfs   /tmp    tmpfs   defaults,noexec,nosuid,nodev,size=2G    0 0
 EOF
-
-# 方案B：如果 /tmp 在根分区上，通过 mount --bind 方式加固
-# mkdir -p /tmp_new
-# mount --bind /tmp_new /tmp
-# mount -o remount,noexec,nosuid,nodev /tmp
 
 # 重新挂载
 mount -o remount /tmp
@@ -822,17 +779,7 @@ service auditd restart
 swapon --show
 cat /proc/swaps
 
-# 方案A：完全关闭 Swap（适合数据库服务器，内存 >= 16G，且必须在维护窗口执行）
-free -h
-swapon --show
-# swapoff -a
-# 只注释第三列为 swap 的挂载项，不要用 sed -i '/swap/d' 误删包含 swap 字符串的其他行
-# cp -a /etc/fstab /etc/fstab.$(date +%F_%H%M%S).bak
-# awk '($3=="swap"){$0="#"$0} {print}' /etc/fstab > /etc/fstab.new && mv /etc/fstab.new /etc/fstab
-# 注释掉 /etc/fstab 中 swap 相关行
-
-# 方案B：降低 swappiness（适合内存不充裕的应用服务器）
-# 将 swappiness 设置为 1（尽量不使用 swap）
+# 保留 Swap 作为系统兜底，并将使用倾向降到最低
 echo 'vm.swappiness = 1' >> /etc/sysctl.conf
 sysctl -p
 
@@ -1246,29 +1193,112 @@ export PATH=$JAVA_HOME/bin:$PATH
 ```bash
 chmod 644 /etc/profile.d/myenv.sh
 source /etc/profile.d/myenv.sh
-
-# 验证环境变量和 Java 版本
-echo $JAVA_HOME
-which java
-java -version
-javac -version
 ```
-
-**验收标准：**
-
-| 项目 | 期望结果 |
-| --- | --- |
-| `echo $JAVA_HOME` | `/data/module/jdk21` |
-| `which java` | `/data/module/jdk21/bin/java` |
-| `java -version` | 显示 `openjdk version "21.0.11"` |
-| `javac -version` | 显示 `javac 21.0.11` |
 
 > **升级建议：** 后续升级 JDK 时，不要覆盖原目录。先解压新版本目录，再用 `ln -sfn /data/module/<新JDK目录> /data/module/jdk21` 切换软链接，验证通过后再安排旧版本清理。
 
 
 ---
 
-## 24. 常用诊断工具安装
+## 24. Maven 安装与环境变量设置
+
+**目的：** 安装 Java 项目的构建与依赖管理工具，并统一配置全局环境变量。本文以截图中的离线安装包 `apache-maven-3.9.16-bin.tar.gz` 为例，安装目录遵循 `/data/module` 规范。
+
+> **前置条件：** Maven 依赖 JDK。执行本节前必须完成第 23 节，并确认 `java -version` 和 `echo $JAVA_HOME` 输出正常。
+
+```bash
+# 进入软件包所在目录
+cd /data/module
+
+# 确认安装包存在
+ls -lh apache-maven-3.9.16-bin.tar.gz
+
+# 解压 Maven，解压后生成 apache-maven-3.9.16 目录
+tar -zxf apache-maven-3.9.16-bin.tar.gz
+
+# 确认实际解压目录
+ls -ld apache-maven-3.9.16
+
+# 建立稳定软链接，后续升级只需要切换软链接
+ln -sfn /data/module/apache-maven-3.9.16 /data/module/maven
+
+# root 拥有安装目录，普通业务用户只读执行
+chown -R root:root /data/module/apache-maven-3.9.16
+chmod -R go-w /data/module/apache-maven-3.9.16
+```
+
+配置全局环境变量：
+
+> **统一约定：** Maven 环境变量追加到 `/etc/profile.d/myenv.sh`，不要单独创建 `/etc/profile.d/maven.sh`，也不要覆盖文件中已有的 JDK、MySQL、Redis 等配置。Maven 3.9 不需要额外配置已经废弃的 `M2_HOME`。
+
+编辑统一环境变量文件：
+
+```bash
+vim /etc/profile.d/myenv.sh
+```
+
+在 JDK 环境变量之后追加以下内容：
+
+```bash
+# MAVEN_HOME：Maven 当前版本软链接目录，升级时只切换软链接
+export MAVEN_HOME=/data/module/maven
+
+# PATH：将 mvn 命令加入命令搜索路径
+export PATH=$MAVEN_HOME/bin:$PATH
+```
+
+保存后加载生效：
+
+```bash
+chmod 644 /etc/profile.d/myenv.sh
+source /etc/profile.d/myenv.sh
+
+# 验证环境变量、命令入口、实际文件和 Maven 版本
+echo $MAVEN_HOME
+which mvn
+readlink -f "$(which mvn)"
+mvn -version
+```
+
+配置阿里云公共镜像：
+
+> **生产要求：** 国内网络直接访问 Maven Central 容易出现连接超时或下载速度不稳定。未接入企业 Nexus/Artifactory 前，统一使用阿里云公共镜像代理 Central。`mirrorOf` 设置为 `central`，避免覆盖项目声明的企业私服或其他专用仓库。
+
+先备份 Maven 自带的全局配置，再写入统一镜像配置：
+
+```bash
+# 备份原始配置，文件名包含操作时间，便于回滚
+cp -a "$MAVEN_HOME/conf/settings.xml" \
+    "$MAVEN_HOME/conf/settings.xml.bak.$(date +%Y%m%d%H%M%S)"
+
+cat > "$MAVEN_HOME/conf/settings.xml" << 'EOF'
+<?xml version="1.0" encoding="UTF-8"?>
+<settings xmlns="http://maven.apache.org/SETTINGS/1.0.0"
+          xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+          xsi:schemaLocation="http://maven.apache.org/SETTINGS/1.0.0 https://maven.apache.org/xsd/settings-1.0.0.xsd">
+  <mirrors>
+    <mirror>
+      <id>aliyun-public</id>
+      <name>Aliyun Maven Public Mirror</name>
+      <url>https://maven.aliyun.com/repository/public</url>
+      <mirrorOf>central</mirrorOf>
+    </mirror>
+  </mirrors>
+</settings>
+EOF
+
+# 全局配置由 root 维护，所有用户只读
+chown root:root "$MAVEN_HOME/conf/settings.xml"
+chmod 644 "$MAVEN_HOME/conf/settings.xml"
+```
+
+> **镜像行为说明：** Maven 对同一个仓库只选择一个匹配的 `<mirror>`，阿里云不可用时不会自动回退 Maven Central，也不要通过堆叠多个 `mirrorOf=central` 的镜像伪装成容灾。正式接入企业 Nexus/Artifactory 后，应将这里替换为企业聚合仓库，并由企业仓库负责缓存、审计和上游容灾。
+
+> **升级建议：** 后续升级 Maven 时，不要覆盖原目录。先解压新版本目录，将已验证的 `settings.xml` 复制到新版本的 `conf` 目录，再用 `ln -sfn /data/module/<新Maven目录> /data/module/maven` 切换软链接，重新登录或加载环境变量后完成版本与镜像验证；确认无误再安排旧版本清理。
+
+---
+
+## 25. 常用诊断工具安装
 
 **目的：** 生产故障排查必备工具（基础工具已在第 3 节安装）。**Docker 安装前应确保诊断工具就绪，便于定位安装问题。**
 
@@ -1303,107 +1333,21 @@ iostat -x 1 3 # 磁盘 I/O
 
 ---
 
-## 25. Docker 安装与配置
+## 26. Docker 安装与配置
 
-**目的：** 安装 Docker 并配置生产级参数。
+Docker 不再在初始化手册中重复维护安装命令和 `daemon.json`。需要安装 Docker 的服务器，完成本文初始化后，继续执行 [Docker 26.1.4 生产级安装配置手册](./Docker生产级安装配置运维手册.md)。
 
-```bash
-# 安装依赖
-yum install -y yum-utils device-mapper-persistent-data lvm2
+执行专项手册前只需先确认：
 
-# 添加 Docker 官方源
-# 前文已经配置 Docker CE 源时，不要重复添加官方公网源；内网环境应使用企业 yum 源或离线 RPM 包
-# yum-config-manager --add-repo https://download.docker.com/linux/centos/docker-ce.repo
-
-# 查看仓库中可用版本，再选择经过测试验证的版本
-yum list docker-ce --showduplicates | sort -r | head -20
-
-# 安装指定版本（推荐安装稳定版本，而非最新版）
-yum install -y docker-ce-24.0.7 docker-ce-cli-24.0.7 containerd.io
-
-# 创建 Docker 数据目录（务必放在独立数据盘 /data）
-mkdir -p /data/docker
-
-# Docker 前置检查：overlay2 建议使用 xfs ftype=1 或 ext4；网段、DNS、镜像仓库需先确认
-findmnt /data
-xfs_info /data 2>/dev/null | grep ftype || true
-ip route
-cat /etc/resolv.conf
-
-# Docker 生产级配置
-cat > /etc/docker/daemon.json << 'EOF'
-{
-  "data-root": "/data/docker",
-  "exec-opts": ["native.cgroupdriver=systemd"],
-  "storage-driver": "overlay2",
-  "log-driver": "json-file",
-  "log-opts": {
-    "max-size": "100m",
-    "max-file": "5"
-  },
-  "registry-mirrors": [
-    "https://mirror.ccs.tencentyun.com",
-    "https://docker.mirrors.ustc.edu.cn"
-  ],
-  "insecure-registries": [],
-  "live-restore": true,
-  "max-concurrent-downloads": 10,
-  "max-concurrent-uploads": 5,
-  "default-ulimits": {
-    "nofile": {
-      "Name": "nofile",
-      "Hard": 1048576,
-      "Soft": 1048576
-    },
-    "nproc": {
-      "Name": "nproc",
-      "Hard": 65536,
-      "Soft": 65536
-    }
-  },
-  "bip": "172.30.255.1/24",
-  "default-address-pools": [
-    {
-      "base": "172.30.0.0/16",
-      "size": 24
-    }
-  ]
-}
-EOF
-
-# 启动 Docker
-systemctl daemon-reload
-systemctl enable docker --now
-
-# 验证
-docker info
-docker version
-docker run --rm hello-world
-
-# 清理测试镜像
-docker rmi hello-world
-```
-
-**daemon.json 关键配置说明：**
-
-> **实战避坑：** `daemon.json` 中不要默认写死公网 DNS。企业内网域名、云厂商私有域名、Nacos/Consul/Harbor 等经常依赖内部 DNS，写死 `8.8.8.8` 可能导致容器内解析内网服务失败。默认让 Docker 继承宿主机 `/etc/resolv.conf`，如必须配置 DNS，应使用企业 DNS 或云厂商内网 DNS。
-
-
-| 参数                            | 说明                         |
-| ----------------------------- | -------------------------- |
-| `data-root`                   | Docker 数据存储位置，必须在独立数据盘     |
-| `log-driver + log-opts`       | 限制容器日志大小，防止撑爆磁盘            |
-| `live-restore`                | Docker daemon 重启时不影响运行中的容器 |
-| `native.cgroupdriver=systemd` | 与 systemd 统一 cgroup 管理     |
-| `default-ulimits`             | 容器默认句柄数限制                  |
-| `max-concurrent-downloads`    | 并发拉取镜像数，避免占用过多带宽           |
-| `bip`                         | 默认 `bridge/docker0` 网桥地址段，需避开企业内网/VPC/VPN/专线网段 |
-| `default-address-pools`       | Docker 自定义 bridge 网络地址池，需统一规划，避免与内网网段冲突 |
+- `/data` 是独立数据盘；
+- Docker 网段与内网、VPC、VPN、专线无冲突；
+- 服务器不存在未登记的历史 Docker、容器和数据；
+- 已接受 CentOS 7.9 与 Docker 26.1.4 均停止维护的风险，并有迁移计划。
 
 
 ---
 
-## 26. 日志配置
+## 27. 日志配置
 
 **目的：** 防止日志撑爆磁盘，确保日志可追溯。
 
@@ -1448,7 +1392,7 @@ journalctl --disk-usage
 
 ---
 
-## 27. Core Dump 配置
+## 28. Core Dump 配置
 
 **目的：** 应用崩溃时生成 core dump 文件，用于离线分析故障原因。
 
@@ -1477,80 +1421,6 @@ ulimit -c   # 应显示: unlimited
 
 ---
 
-## 28. 最终验证清单
-
-**完成所有步骤后，逐项检查：**
-
-```bash
-echo "=============================="
-echo " 生产环境初始化验证清单"
-echo "=============================="
-
-echo ""
-echo "--- 1. 系统信息 ---"
-hostname
-cat /etc/redhat-release
-uname -r
-free -h
-df -h / /data
-
-echo ""
-echo "--- 2. 时区/NTP ---"
-timedatectl | grep -E "Time zone|NTP"
-chronyc tracking | grep "Leap status"
-
-echo ""
-echo "--- 3. 安全状态 ---"
-echo "SELinux: $(getenforce)"
-echo "firewalld: $(systemctl is-active firewalld 2>/dev/null || echo '已关闭')"
-
-echo ""
-echo "--- 4. SSH ---"
-grep -E "^Port|^PermitRootLogin|^PasswordAuthentication|^MaxSessions|^MaxStartups|^ClientAliveCountMax|^TCPKeepAlive" /etc/ssh/sshd_config
-
-echo ""
-echo "--- 5. fail2ban ---"
-systemctl is-active fail2ban 2>/dev/null || echo "fail2ban 未安装"
-
-echo ""
-echo "--- 6. auditd ---"
-systemctl is-active auditd
-
-echo ""
-echo "--- 7. 内存管理 ---"
-swapon --show || echo "Swap 已关闭"
-cat /proc/sys/vm/swappiness
-cat /sys/kernel/mm/transparent_hugepage/enabled
-
-echo ""
-echo "--- 8. 句柄数 ---"
-ulimit -n
-ulimit -u
-
-echo ""
-echo "--- 9. 内核参数 ---"
-sysctl net.ipv4.tcp_congestion_control
-sysctl fs.file-max
-sysctl vm.dirty_ratio
-
-echo ""
-echo "--- 10. Docker ---"
-systemctl is-active docker
-docker info 2>/dev/null | grep -E "Docker Root Dir|Storage Driver|Logging Driver"
-
-echo ""
-echo "--- 11. Core Dump ---"
-cat /proc/sys/kernel/core_pattern
-ulimit -c
-
-echo ""
-echo "=============================="
-echo " 验证完成！请重启服务器使所有配置生效。"
-echo "=============================="
-```
-
----
-
 ## 附录：配置文件变更清单
 
 
@@ -1576,4 +1446,4 @@ echo "=============================="
 | `/etc/systemd/system/disable-thp.service` | THP 关闭服务           |
 
 
-> **Author:** 王有政 | **最后更新:** 2026-06-15
+> **Author:** 王有政 | **最后更新:** 2026-07-15

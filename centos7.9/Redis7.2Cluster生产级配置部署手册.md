@@ -1,7 +1,7 @@
 # Redis 7.2 Cluster 生产级配置部署手册
 
 > **Author:** 王有政  
-> **日期:** 2026-06-15  
+> **日期:** 2026-07-15<br>
 > **适用系统:** CentOS 7.9 (x86_64)  
 > **Redis 版本:** 7.2.7 (BSD-3 许可证)  
 > **文档定位:** Redis Cluster 分片集群生产级部署。本文以 3 主 3 从为最小生产拓扑，适用于需要水平扩展容量和吞吐的 Redis 场景。
@@ -19,14 +19,7 @@
 7. [systemd 服务配置](#7-systemd-服务配置)
 8. [网络边界与端口规划](#8-网络边界与端口规划)
 9. [启动节点与创建集群](#9-启动节点与创建集群)
-10. [集群验证](#10-集群验证)
-11. [故障切换演练](#11-故障切换演练)
-12. [扩容、缩容与迁移原则](#12-扩容缩容与迁移原则)
-13. [生产验证清单](#13-生产验证清单)
-14. [运维监控指标](#14-运维监控指标)
-15. [变更与回滚建议](#15-变更与回滚建议)
-
----
+10. [变更与回滚建议](#10-变更与回滚建议)
 
 ## 1. 适用范围与架构原则
 
@@ -423,277 +416,9 @@ unset REDISCLI_AUTH
 
 ---
 
-## 10. 集群验证
+## 10. 变更与回滚建议
 
-### 10.1 查看集群状态
-
-```bash
-export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER INFO
-redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER NODES
-unset REDISCLI_AUTH
-```
-
-期望：
-
-```text
-cluster_state:ok
-cluster_slots_assigned:16384
-cluster_slots_ok:16384
-cluster_known_nodes:6
-cluster_size:3
-```
-
-### 10.2 检查 slot 分布
-
-```bash
-export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli --cluster check 10.10.30.11:16379 --user clusteradmin
-unset REDISCLI_AUTH
-```
-
-期望：
-
-```text
-[OK] All nodes agree about slots configuration.
-[OK] All 16384 slots covered.
-```
-
-### 10.3 验证 MOVED 重定向
-
-不使用 `-c` 时，访问非本节点 slot 可能返回：
-
-```text
-MOVED <slot> <ip>:<port>
-```
-
-这是 Redis Cluster 正常行为。业务客户端必须支持自动处理 `MOVED` 和 `ASK`。
-
-### 10.4 验证 hash tag
-
-跨 slot 多 key 命令会失败：
-
-```bash
-MSET user:1:name a user:2:name b
-```
-
-可能返回：
-
-```text
-CROSSSLOT Keys in request don't hash to the same slot
-```
-
-需要使用 hash tag：
-
-```bash
-MSET user:{1001}:name a user:{1001}:age 20
-```
-
----
-
-## 11. 故障切换演练
-
-### 11.1 停止一个 master
-
-先确认 master 节点：
-
-```bash
-export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER NODES
-unset REDISCLI_AUTH
-```
-
-在某个 master 节点上执行：
-
-```bash
-systemctl stop redis
-```
-
-观察集群状态：
-
-```bash
-export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.12 -p 16379 --user clusteradmin CLUSTER INFO
-redis-cli -c -h 10.10.30.12 -p 16379 --user clusteradmin CLUSTER NODES
-unset REDISCLI_AUTH
-```
-
-期望：
-
-- 对应 replica 被提升为 master；
-- `cluster_state` 恢复为 `ok`；
-- slot 仍然全部覆盖。
-
-### 11.2 恢复旧 master
-
-在旧 master 节点执行：
-
-```bash
-systemctl start redis
-```
-
-恢复后旧 master 通常会作为新 master 的 replica 加入集群。确认：
-
-```bash
-export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.12 -p 16379 --user clusteradmin CLUSTER NODES
-unset REDISCLI_AUTH
-```
-
-### 11.3 风险说明
-
-Redis Cluster 故障切换不是强一致切换。以下情况可能产生数据丢失：
-
-- master 写入成功后尚未复制到 replica 即宕机；
-- 网络分区导致客户端仍短时间写入旧 master；
-- replica 复制延迟较大时发生提升。
-
-如业务对写入丢失极敏感，Redis Cluster 不应作为唯一事实源。
-
----
-
-## 12. 扩容、缩容与迁移原则
-
-### 12.1 扩容原则
-
-扩容一般流程：
-
-1. 新增 Redis 节点并完成基础配置；
-2. 启动新节点；
-3. 使用 `redis-cli --cluster add-node` 加入集群；
-4. 使用 `redis-cli --cluster reshard` 迁移 slot；
-5. 为新增 master 添加 replica；
-6. 验证 slot 覆盖和主从关系。
-
-示例：
-
-```bash
-export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli --cluster add-node 10.10.30.17:16379 10.10.30.11:16379 --user clusteradmin
-redis-cli --cluster reshard 10.10.30.11:16379 --user clusteradmin
-unset REDISCLI_AUTH
-```
-
-### 12.2 缩容原则
-
-缩容必须先迁移被删除 master 上的 slot，再删除节点：
-
-```bash
-export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli --cluster reshard 10.10.30.11:16379 --user clusteradmin
-redis-cli --cluster del-node 10.10.30.11:16379 <node-id> --user clusteradmin
-unset REDISCLI_AUTH
-```
-
-注意：
-
-- 不要直接停止仍持有 slot 的 master；
-- 缩容前必须确认 slot 已迁移完成；
-- 缩容操作应在业务低峰执行；
-- 操作前必须备份配置和数据。
-
-### 12.3 大 key 与热 key 风险
-
-Cluster 只能按 key 分片，不能拆分单个大 key。生产应避免：
-
-- 单个 hash/list/set/zset 过大；
-- 所有热点 key 因 hash tag 落在同一 slot；
-- 过度使用同一个 hash tag。
-
-建议：
-
-```text
-单 key value 控制在业务可接受范围内，避免 MB 级大 key。
-集合类 key 控制元素数量，必要时按业务维度拆分。
-热点 key 应使用本地缓存、请求合并或业务拆分降低压力。
-```
-
----
-
-## 13. 生产验证清单
-
-| 检查项 | 期望 |
-|---|---|
-| 节点数量 | 至少 6 个 |
-| Master 数量 | 至少 3 个 |
-| 每个 Master | 至少 1 个 Replica |
-| `cluster_state` | `ok` |
-| slot 覆盖 | `16384` 全覆盖 |
-| Redis 服务端口 | 仅内网访问 |
-| Cluster Bus 端口 | 仅集群节点访问 |
-| `cluster-announce-ip` | 正确内网 IP |
-| `cluster-config-file` | 位于数据目录且 Redis 可写 |
-| ACL | 所有节点一致 |
-| `default` 用户 | `off` |
-| 应用客户端 | Cluster 模式 |
-| 跨 slot 操作 | 已完成业务改造 |
-| 持久化 | 符合数据可靠性要求 |
-| 故障切换演练 | 已完成 |
-| 扩缩容演练 | 预生产已验证 |
-
----
-
-## 14. 运维监控指标
-
-### 14.1 Cluster 状态
-
-重点命令：
-
-```bash
-export REDISCLI_AUTH='ReplaceWith_ClusterAdmin_StrongPassword_2026'
-redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER INFO
-redis-cli -c -h 10.10.30.11 -p 16379 --user clusteradmin CLUSTER NODES
-redis-cli --cluster check 10.10.30.11:16379 --user clusteradmin
-unset REDISCLI_AUTH
-```
-
-重点指标：
-
-| 指标 | 告警条件 |
-|---|---|
-| `cluster_state` | 不为 `ok` |
-| `cluster_slots_fail` | 大于 `0` |
-| `cluster_slots_pfail` | 大于 `0` |
-| `cluster_known_nodes` | 小于预期 |
-| `cluster_size` | 小于预期 master 数 |
-| slot 覆盖 | 小于 `16384` |
-
-### 14.2 节点状态
-
-每个节点需要监控：
-
-| 指标 | 风险说明 |
-|---|---|
-| `used_memory` | 内存使用量 |
-| `used_memory_rss` | 进程实际内存 |
-| `mem_fragmentation_ratio` | 内存碎片率 |
-| `connected_clients` | 客户端连接数 |
-| `blocked_clients` | 阻塞客户端 |
-| `evicted_keys` | key 淘汰数量 |
-| `rejected_connections` | 连接被拒绝 |
-| `instantaneous_ops_per_sec` | QPS |
-| `latest_fork_usec` | fork 延迟 |
-| `master_link_status` | replica 到 master 的复制状态 |
-| `master_last_io_seconds_ago` | 复制链路空闲时间 |
-
-### 14.3 业务侧指标
-
-必须监控客户端侧：
-
-- `MOVED` 重定向数量；
-- `ASK` 重定向数量；
-- 连接池耗尽；
-- 命令超时；
-- `CROSSSLOT` 错误；
-- 热 key；
-- 大 key；
-- 单 slot 流量倾斜。
-
----
-
-## 15. 变更与回滚建议
-
-### 15.1 变更前备份
+### 10.1 变更前备份
 
 每个节点执行：
 
@@ -703,7 +428,7 @@ cp /etc/redis/users.acl /etc/redis/users.acl.bak.$(date +%F-%H%M%S)
 cp /data/redis/data/nodes-6379.conf /data/redis/data/nodes-6379.conf.bak.$(date +%F-%H%M%S)
 ```
 
-### 15.2 禁止事项
+### 10.2 禁止事项
 
 生产禁止：
 
@@ -715,7 +440,7 @@ cp /data/redis/data/nodes-6379.conf /data/redis/data/nodes-6379.conf.bak.$(date 
 6. 在高峰期执行大规模 reshard；
 7. 使用不一致的 ACL 文件启动部分节点。
 
-### 15.3 滚动重启建议
+### 10.3 滚动重启建议
 
 单节点滚动重启：
 
@@ -735,7 +460,7 @@ unset REDISCLI_AUTH
 
 确认 `cluster_state:ok` 后再处理下一个节点。
 
-### 15.4 回滚原则
+### 10.4 回滚原则
 
 - 配置变更失败：回滚 `redis.conf` 和 `users.acl` 后重启单节点；
 - 创建集群失败：确认所有节点无业务数据后，可停止 Redis、清理 `nodes-6379.conf`、清空测试数据，再重新创建；

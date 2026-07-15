@@ -1,7 +1,7 @@
 # TDengine 3.4 OSS 单体生产级配置部署手册
 
 > **Author:** 王有政<br>
-> **日期:** 2026-07-13<br>
+> **日期:** 2026-07-15<br>
 > **系统:** CentOS 7.9 x86_64<br>
 > **版本:** TDengine TSDB-OSS 3.4.1.13<br>
 > **范围:** 单体部署。集群、高可用和跨机房容灾不在本文展开。
@@ -10,7 +10,7 @@
 
 ## 使用说明
 
-本文按实际部署顺序编写。第一次部署时，从第 1 节开始依次执行，不要跳过验证步骤。
+本文按实际部署顺序编写。第一次部署时，从第 1 节开始依次执行。
 
 本文已经固定安装方式、目录、端口和组件，执行人员按顺序操作即可：
 
@@ -934,135 +934,9 @@ curl -fsS http://127.0.0.1:16043/metrics | sed -n '1,30p'
 
 ---
 
-## 16. 上线前验证清单
+## 16. 升级和回滚
 
-### 16.1 安装和配置
-
-- [ ] CentOS 7.9 x86_64；
-- [ ] hostname 唯一并解析到内网 IP；
-- [ ] 官方包 MD5、SHA256、gzip 校验通过；
-- [ ] 程序位于 `/data/module/tdengine/3.4.1.13/taos`；
-- [ ] `/data/module/tdengine/current` 指向当前版本；
-- [ ] data/log/tmp 位于 `/data/module/tdengine`；
-- [ ] Explorer 数据和日志位于 `/data/module/tdengine`；
-- [ ] `/var/log/taos` 不是 `777`；
-- [ ] `taos.cfg` 没有重复参数；
-- [ ] root 默认密码已经修改；
-- [ ] taosKeeper 配置权限为 `0600`。
-
-### 16.2 服务和端口
-
-```bash
-systemctl is-active taosd taosadapter taoskeeper taos-explorer
-systemctl is-enabled taosd taosadapter taoskeeper taos-explorer
-ss -lntup | grep -E ':(6030|6041|6043|6044|6045|6046|6047|6048|6049|6060|16030|16041|16043|16060)\b'
-```
-
-- [ ] taosd、taosadapter、taoskeeper、taos-explorer 为 active/enabled；
-- [ ] 仅监听审批通过的 `16030`、`16041`、`16043`、`16060`；
-- [ ] 官方默认端口 `6030`、`6041`、`6043～6049`、`6060` 未监听；
-- [ ] `16060` 仅允许运维网段访问；
-- [ ] 运维网浏览器可以打开 Explorer，并使用修改后的 TDengine 账号密码登录；
-- [ ] 非运维网段不能访问 `16060`；
-- [ ] 数据库端口未对公网开放。
-
-### 16.3 读写验证
-
-```bash
-taos -h 127.0.0.1 -P 16030 -u root -p
-```
-
-```sql
-CREATE DATABASE verify_tdengine KEEP 7d REPLICA 1 VGROUPS 2;
-USE verify_tdengine;
-
-CREATE STABLE meters (
-  ts TIMESTAMP,
-  current FLOAT,
-  voltage INT
-) TAGS (
-  location VARCHAR(64),
-  group_id INT
-);
-
-CREATE TABLE d001 USING meters TAGS ('beijing', 1);
-INSERT INTO d001 VALUES (NOW, 10.2, 220);
-SELECT * FROM meters;
-FLUSH DATABASE verify_tdengine;
-DROP DATABASE verify_tdengine;
-```
-
-- [ ] Native CLI 读写成功；
-- [ ] 业务实际使用的 WebSocket/REST 连接成功；
-- [ ] 应用断开重连成功；
-- [ ] 典型业务查询结果正确。
-
-### 16.4 备份和监控
-
-- [ ] 全量备份成功；
-- [ ] SHA256 校验成功；
-- [ ] 备份已复制到独立存储；
-- [ ] 恢复演练成功；
-- [ ] `/check_health` 成功；
-- [ ] Prometheus 抓取成功；
-- [ ] 告警已经测试。
-
-### 16.5 重启验证
-
-在维护窗口执行：
-
-```bash
-systemctl restart taosd
-systemctl restart taosadapter
-systemctl restart taoskeeper
-systemctl restart taos-explorer
-systemctl is-active taosd taosadapter taoskeeper taos-explorer
-```
-
-条件允许时完成一次操作系统重启，确认数据盘挂载、服务、端口、数据和监控全部恢复。
-
----
-
-## 17. 日常运维
-
-```bash
-# 服务
-systemctl status taosd taosadapter taoskeeper taos-explorer --no-pager
-journalctl -u taosd --since '-30 min' --no-pager
-journalctl -u taosadapter --since '-30 min' --no-pager
-journalctl -u taoskeeper --since '-30 min' --no-pager
-journalctl -u taos-explorer --since '-30 min' --no-pager
-
-# 资源
-df -hT /data
-du -sh /data/module/tdengine/data /data/module/tdengine/explorer /data/module/tdengine/logs/* /data/module/tdengine/tmp
-iostat -x 1 5
-chronyc tracking
-
-# TDengine
-taos -h 127.0.0.1 -P 16030 -u root -p
-```
-
-常用 SQL：
-
-```sql
-SHOW DNODES;
-SHOW DATABASES;
-SELECT * FROM information_schema.ins_dnodes;
-SELECT * FROM information_schema.ins_vnodes;
-USE log;
-SHOW STABLES;
-```
-
-停止顺序：先停止业务写入，再停止 Explorer、Keeper、Adapter、taosd。
-
-启动顺序：taosd、Adapter、Keeper、Explorer，验证通过后恢复业务写入。
-
----
-
-## 18. 升级和回滚
-
-### 18.1 升级前必须完成
+### 16.1 升级前必须完成
 
 - 重新核验目标版本官方文档和发布说明；
 - 校验并审计新 Generic 包；
@@ -1071,7 +945,7 @@ SHOW STABLES;
 - 保留旧版本安装包、解压目录和程序目录；
 - 申请停机窗口。
 
-### 18.2 升级步骤
+### 16.2 升级步骤
 
 下面用 `3.4.x.y` 表示经过验证的目标版本，执行前统一替换成实际版本号。
 
@@ -1110,9 +984,9 @@ systemctl start taos-explorer
 taosd -V
 ```
 
-执行第 16 节验证，通过后恢复业务写入。
+服务启动后恢复业务写入。
 
-### 18.3 回滚
+### 16.3 回滚
 
 只有官方确认可逆的同一 Maintenance 系列，才允许尝试原目录回滚：
 
@@ -1143,27 +1017,7 @@ taosd -V
 
 ---
 
-## 19. 风险说明
-
-| 风险 | 控制措施 |
-|---|---|
-| 单体是单点，主机故障即服务中断 | 明确 SLA、异机备份；需要高可用时编制集群方案 |
-| CentOS 7 已 EOL | 严格网络隔离并制定操作系统迁移计划 |
-| 3.4.1 未被官网标注为 LTS | 预生产验证、压测、恢复演练；后续评估 LTS/新维护版本 |
-| Generic 安装器修改系统路径 | 保留安装前后记录，使用带版本目录，升级后检查全局链接和 unit |
-| CentOS 7 下服务默认以 root 运行 | 最小端口、网络白名单、严格配置权限；Explorer 仅向运维网段开放 |
-| Explorer 随 OSS 包免费提供但本身不开源，且可以执行数据库管理操作 | 仅运维网访问，修改默认密码后启动，使用数据库账号登录，不对公网开放 |
-| Keeper 配置保存数据库密码 | 文件权限 `0600`，密码只存企业密码库 |
-| OSS 没有持续增量和 PITR | 全量/分段备份、异机复制、定期恢复演练 |
-| 磁盘写满 | 70%/80% 告警、预留 30%、提前扩容 |
-| REST 返回大结果集可能占用大量内存 | 应用限制时间范围和返回量，优先使用 WebSocket 流式读取 |
-| 修改 hostname/fqdn 影响节点身份 | 初始化前固化，运行后变更必须制定迁移方案 |
-
-生产评审必须接受：备份能够改善数据恢复，但不能让单体实例具备高可用能力。
-
----
-
-## 20. 官方参考资料
+## 17. 官方参考资料
 
 以下资料于 2026-07-14 重新核验：
 
