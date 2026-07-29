@@ -52,6 +52,7 @@ export REDIS_HOME=/data/module/redis7.2
 - [服务器端口统一规划规范](centos7.9/服务器端口统一规划规范.md)
 - [Docker 26.1.4 生产级安装配置手册](centos7.9/Docker生产级安装配置运维手册.md)
 - [Nginx 1.31 单体生产级配置部署手册](centos7.9/Nginx1.31单体生产级配置部署手册.md)
+- [Nexus Repository 3.94.1 单体生产级 Docker 配置部署手册](centos7.9/Nexus3.94.1单体生产级Docker配置部署手册.md)
 - [MySQL 8.4 单体生产级配置部署手册](centos7.9/MySQL8.4单体生产级配置部署手册.md)
 - [Redis 7.2 单体生产级配置部署手册](centos7.9/Redis7.2单体生产级配置部署手册.md)
 - [Redis 7.2 主从生产级配置部署手册](centos7.9/Redis7.2主从生产级配置部署手册.md)
