@@ -2,33 +2,33 @@
 
 > **Author:** 王有政<br>
 > **Encoding:** UTF-8<br>
-> **日期:** 2026-07-29<br>
+> **日期:** 2026-07-30<br>
 > **适用系统:** CentOS 7.9 x86_64 存量服务器<br>
 > **Nexus 版本:** 3.94.1（产品构建 3.94.1-06）<br>
 > **Nexus 镜像:** `sonatype/nexus3:3.94.1-ubi`<br>
 > **PostgreSQL 镜像:** `postgres:17.10-bookworm`
 
-> CentOS 7.9、Docker 26.1.4 均已退出厂商支持范围。本手册只用于暂时不能迁移的存量服务器。正式接入业务前必须通过第 4 节镜像运行门禁、完整验收和一次恢复演练；新服务器应部署在受支持的 EL9 系统上。
+> CentOS 7.9、Docker 26.1.4 均已退出厂商支持范围。本手册只用于暂时不能迁移的存量服务器。正式接入业务前必须通过第 4 节镜像基础运行检查、完整验收和一次恢复演练；新服务器应部署在受支持的 EL9 系统上。
 
-## 目录
+## 分阶段导航
 
-1. [部署基线](#1-部署基线)
-2. [资源、路径与端口规划](#2-资源路径与端口规划)
-3. [部署前检查](#3-部署前检查)
-4. [固定镜像并执行兼容性门禁](#4-固定镜像并执行兼容性门禁)
-5. [创建目录和密钥](#5-创建目录和密钥)
-6. [初始化 PostgreSQL](#6-初始化-postgresql)
-7. [配置 Nexus 数据源](#7-配置-nexus-数据源)
-8. [编写 Docker Compose 配置](#8-编写-docker-compose-配置)
-9. [启动服务](#9-启动服务)
-10. [配置 Nginx HTTPS](#10-配置-nginx-https)
-11. [初始化 Nexus](#11-初始化-nexus)
-12. [配置 Maven 客户端](#12-配置-maven-客户端)
-13. [备份](#13-备份)
-14. [恢复](#14-恢复)
-15. [升级与回滚](#15-升级与回滚)
-16. [日常运维与验收](#16-日常运维与验收)
-17. [官方参考](#17-官方参考)
+| 阶段 | 使用目的 | 直接入口 |
+| --- | --- | --- |
+| 部署规划 | 确认架构边界、资源、路径和端口 | [1. 部署基线](#1-部署基线)<br>[2. 资源、路径与端口规划](#2-资源路径与端口规划) |
+| 部署准备 | 检查宿主机并验证固定版本镜像 | [3. 部署前检查](#3-部署前检查)<br>[4. 固定镜像并执行基础运行检查](#4-固定镜像并执行基础运行检查) |
+| 正式部署 | 创建持久化数据、配置并启动服务 | [5. 创建目录和密钥](#5-创建目录和密钥)<br>[6. 初始化 PostgreSQL](#6-初始化-postgresql)<br>[7. 配置 Nexus 数据源](#7-配置-nexus-数据源)<br>[8. 编写 Docker Compose 配置](#8-编写-docker-compose-配置)<br>[9. 启动服务](#9-启动服务)<br>[10. 配置 Nginx 访问入口](#10-配置-nginx-访问入口)<br>[11. 初始化 Nexus](#11-初始化-nexus)<br>[12. 配置 Maven 客户端](#12-配置-maven-客户端) |
+| 运维保障 | 执行备份、恢复、升级和日常验收 | [13. 备份](#13-备份)<br>[14. 恢复](#14-恢复)<br>[15. 升级与回滚](#15-升级与回滚)<br>[16. 日常运维与验收](#16-日常运维与验收) |
+| 参考资料 | 查阅产品与镜像官方文档 | [17. 官方参考](#17-官方参考) |
+
+从第 5 节开始进入正式部署流程，操作将创建持久化目录、密钥、数据库及服务配置。
+
+## 执行约定
+
+- 首次部署必须按第 3 节至第 12 节的顺序执行，不要跳过中间步骤；
+- 除第 11 节明确要求使用浏览器、第 12 节明确要求在 Maven 客户端执行外，所有 `bash` 命令均在 CentOS 7.9 宿主机上以 `root` 用户执行，不要先进入容器；
+- `docker compose exec` 表示由 Compose 在已经运行的目标容器内执行该条子命令，执行人仍然是在宿主机终端输入命令；
+- 除明确标注“仅在故障或误操作后执行”的恢复代码块外，正式部署阶段的每个 `bash` 代码块都是一个完整执行单元，应整块复制执行；确认该代码块没有报错并满足紧随其后的结果要求，再执行下一块；
+- Nexus 和 PostgreSQL 只有一条正式部署路径。第 10 节根据现场条件二选一：具备域名和证书时使用“域名 + HTTPS”；只有固定公司内网 IP 且无法取得证书时使用“内网 IP + HTTP”。两个分支不得同时执行。
 
 ---
 
@@ -40,7 +40,7 @@
 - Nexus 使用外置 PostgreSQL，不允许以嵌入式 H2 作为本部署的生产数据库；
 - PostgreSQL 只在 Compose 网络内提供服务，不发布宿主机 `5432` 端口；
 - Nexus 只发布到宿主机回环地址 `127.0.0.1:18082`；
-- 宿主机 Nginx 监听 `18080/18443`，统一提供 HTTPS 入口；
+- 宿主机 Nginx 作为唯一外部入口：标准环境提供域名 HTTPS，受限内网环境提供固定 IP HTTP；
 - Blob、数据库、配置和密钥全部持久化到 `/data`；
 - 关闭匿名访问，发布账号不授予删除权限；
 - Maven Release 仓库禁止覆盖发布，Snapshot 仓库允许重新发布；
@@ -79,19 +79,19 @@
 | 本机密钥文件 | `/data/module/nexus/secrets` |
 | 本机备份 | `/data/backup/nexus` |
 | Nginx 站点配置 | `/data/module/nginx/conf/conf.d/nexus.conf` |
-| TLS 证书 | `/data/module/nginx/conf/certs/nexus.example.com.crt` |
-| TLS 私钥 | `/data/module/nginx/conf/certs/nexus.example.com.key` |
+| TLS 证书（域名 HTTPS 分支） | `/data/module/nginx/conf/certs/${NEXUS_DOMAIN}.crt` |
+| TLS 私钥（域名 HTTPS 分支） | `/data/module/nginx/conf/certs/${NEXUS_DOMAIN}.key` |
 
 ### 2.3 端口规划
 
 | 端口 | 监听地址 | 用途 | 暴露策略 |
 | --- | --- | --- | --- |
-| `18080/tcp` | 宿主机业务地址 | Nginx HTTP 跳转入口 | 仅向受信研发网段开放 |
-| `18443/tcp` | 宿主机业务地址 | Nginx HTTPS 业务入口 | 仅向受信研发网段开放 |
+| `18083/tcp` | 宿主机业务地址 | 域名分支的 HTTP 跳转入口，或内网 IP 分支的 HTTP 业务入口 | 仅向受信研发、构建网段开放 |
+| `18483/tcp` | 宿主机业务地址 | 仅用于域名 HTTPS 分支 | 仅向受信研发、构建网段开放 |
 | `18082/tcp` | `127.0.0.1` | Nexus 宿主机回环入口 | 不对外开放 |
 | `5432/tcp` | 仅 Compose 网络 | PostgreSQL | 不发布宿主机端口 |
 
-文中的 `nexus.example.com`、证书路径和受信网段均为现场替换项。生产域名必须提前完成 DNS 解析并申请受信任证书。
+域名 HTTPS 分支必须提前完成 DNS 解析并准备受信任证书。内网 IP HTTP 分支必须使用固定内网 IP，并通过网络策略限制访问来源；动态地址不得作为团队仓库地址。
 
 ---
 
@@ -115,6 +115,7 @@ docker compose version
 docker info | grep -E 'Docker Root Dir|Storage Driver|Backing Filesystem|Supports d_type'
 systemctl is-active docker
 systemctl is-active nginx
+getenforce
 
 findmnt /data
 df -hT /data
@@ -124,7 +125,7 @@ nproc
 timedatectl
 
 ip -4 route
-ss -lntp | grep -E ':(18080|18082|18443)[[:space:]]' || true
+ss -lntp | grep -E ':(18082|18083|18483)[[:space:]]' || true
 ```
 
 如果 `/data` 是 XFS，必须显示 `ftype=1`：
@@ -136,16 +137,17 @@ xfs_info /data | grep 'ftype=1'
 确认以下条件后才能继续：
 
 - `/data` 是持久化数据盘且备份目标可用；
+- Docker Engine 版本为 `26.1.4`，`docker compose version` 显示 Compose v2；不得使用已停止维护的 `docker-compose` v1；
 - Docker `data-root` 为 `/data/docker`；
 - Docker 地址池与企业内网、VPN、VPC 和专线网段不冲突；
 - `18082` 没有被其他进程占用；
-- `18080/18443` 如已由 Nginx 监听，可以继续增加基于域名的站点配置；
+- 第 10 节所选入口端口没有被其他 Nginx 站点占用；
 - 服务器能够访问 Maven Central，或已配置企业允许的上游代理；
 - 已确定 Nexus Community Edition 或 Pro 的使用范围并符合对应许可条款。
 
 ---
 
-## 4. 固定镜像并执行兼容性门禁
+## 4. 固定镜像并执行基础运行检查
 
 ### 4.1 拉取固定版本
 
@@ -156,7 +158,9 @@ docker pull postgres:17.10-bookworm
 
 不允许使用 `latest`。本手册固定使用 Nexus 官方 UBI + Java 21 变体；该选择不改变 CentOS 7.9 已停止支持的事实。
 
-### 4.2 执行容器运行门禁
+### 4.2 检查镜像基础运行能力
+
+以下命令在 CentOS 7.9 宿主机上执行。命令只创建不加载生产配置、不挂载生产目录的临时容器，用于检查镜像内用户和基础运行环境，不会启动正式的 Nexus 或 PostgreSQL 服务；命令结束后，临时容器由 `--rm` 自动删除。
 
 ```bash
 docker run --rm --platform linux/amd64 \
@@ -170,41 +174,17 @@ docker run --rm --platform linux/amd64 \
   -c 'id postgres && postgres --version'
 ```
 
-Nexus 当前用户必须为 UID/GID `200:200`，PostgreSQL 的 `postgres` 用户必须为 UID/GID `999:999`：
+本手册后续的宿主机目录权限按照上述固定镜像中的用户标识设置。检查输出必须显示 Nexus 当前用户的 UID/GID 为 `200:200`，PostgreSQL 的 `postgres` 用户 UID/GID 为 `999:999`。
 
-```bash
-docker run --rm --entrypoint /bin/sh \
-  sonatype/nexus3:3.94.1-ubi -c 'id -u; id -g'
-
-docker run --rm --entrypoint /bin/sh \
-  postgres:17.10-bookworm -c 'id -u postgres; id -g postgres'
-```
-
-任何容器无法启动、Java 21 无法运行、出现 `unsupported kernel`、非法指令或 UID/GID 不一致时，立即停止部署。不得在未验证数据库和升级路径的情况下直接改用旧版 Nexus。
-
-### 4.3 记录实际镜像摘要
-
-```bash
-mkdir -p /data/module/nexus/compose
-
-{
-  date -Is
-  docker image inspect \
-    --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-    sonatype/nexus3:3.94.1-ubi
-  docker image inspect \
-    --format '{{range .RepoDigests}}{{println .}}{{end}}' \
-    postgres:17.10-bookworm
-} | tee /data/module/nexus/compose/image-digests.txt
-```
-
-镜像摘要必须随部署配置和备份保留。后续同一标签摘要发生变化时，按升级流程重新验证，不得静默替换生产镜像。
+临时检查容器无法执行、Java 21 无法运行、出现 `unsupported kernel`、非法指令或 UID/GID 与预期不一致时，立即停止部署。不得在未验证数据库和升级路径的情况下直接改用旧版 Nexus。
 
 ---
 
 ## 5. 创建目录和密钥
 
 ### 5.1 创建目录
+
+以下命令均在 CentOS 7.9 宿主机上以 `root` 用户执行，不要进入容器执行。创建的目录是后续 Docker 绑定挂载使用的宿主机目录。
 
 ```bash
 install -d -m 0755 -o root -g root /data/module/nexus
@@ -216,23 +196,66 @@ install -d -m 0700 -o root -g root /data/module/nexus/secrets
 install -d -m 0700 -o root -g root /data/backup/nexus
 
 install -d -m 0750 -o 200 -g 200 \
+  /data/module/nexus/data/etc
+
+install -d -m 0750 -o 200 -g 200 \
+  /data/module/nexus/data/etc/fabric
+
+stat -c '%u:%g %a %n' \
+  /data/module/nexus/data \
+  /data/module/nexus/data/etc \
   /data/module/nexus/data/etc/fabric
 ```
+
+以上三个目录必须全部显示 UID/GID `200:200`、权限 `750`。`etc` 必须单独创建和授权；如果只创建 `etc/fabric`，隐式创建的中间目录 `etc` 可能属于 `root:root`，导致 Nexus 无法写入 `/nexus-data/etc/nexus.properties`。
 
 ### 5.2 生成数据库密码
 
 ```bash
-umask 077
+(
+set -Eeuo pipefail
 
-openssl rand -hex 32 \
-  > /data/module/nexus/secrets/postgres-admin-password.txt
+POSTGRES_PASSWORD_FILE=/data/module/nexus/secrets/postgres-admin-password.txt
+NEXUS_PASSWORD_FILE=/data/module/nexus/secrets/nexus-db-password.txt
 
-openssl rand -hex 32 \
-  > /data/module/nexus/secrets/nexus-db-password.txt
+if [ -e "${POSTGRES_PASSWORD_FILE}" ] \
+  && [ -e "${NEXUS_PASSWORD_FILE}" ]; then
+  echo '两个密码文件已经存在，本次不会覆盖，将校验并继续复用'
+elif [ -e "${POSTGRES_PASSWORD_FILE}" ] \
+  || [ -e "${NEXUS_PASSWORD_FILE}" ]; then
+  echo '两个密码文件只有一个存在，状态不完整，停止部署' >&2
+  exit 1
+else
+  install -m 0600 -o root -g root /dev/null \
+    "${POSTGRES_PASSWORD_FILE}"
+  install -m 0600 -o root -g root /dev/null \
+    "${NEXUS_PASSWORD_FILE}"
 
-chown 999:999 /data/module/nexus/secrets/*.txt
-chmod 0400 /data/module/nexus/secrets/*.txt
+  openssl rand -hex 32 > "${POSTGRES_PASSWORD_FILE}"
+  openssl rand -hex 32 > "${NEXUS_PASSWORD_FILE}"
+fi
+
+if ! grep -Eq '^[0-9a-f]{64}$' "${POSTGRES_PASSWORD_FILE}" \
+  || ! grep -Eq '^[0-9a-f]{64}$' "${NEXUS_PASSWORD_FILE}"; then
+  echo '一个或两个密码文件内容无效，必须是64位十六进制字符串' >&2
+  exit 1
+fi
+
+if cmp -s "${POSTGRES_PASSWORD_FILE}" "${NEXUS_PASSWORD_FILE}"; then
+  echo 'PostgreSQL 管理员密码和 Nexus 数据库密码不能相同' >&2
+  exit 1
+fi
+
+chown 999:999 "${POSTGRES_PASSWORD_FILE}" "${NEXUS_PASSWORD_FILE}"
+chmod 0400 "${POSTGRES_PASSWORD_FILE}" "${NEXUS_PASSWORD_FILE}"
+
+stat -c '%u:%g %a %n' \
+  "${POSTGRES_PASSWORD_FILE}" \
+  "${NEXUS_PASSWORD_FILE}"
+)
 ```
+
+两行结果必须均显示 UID/GID `999:999`、权限 `400`。该代码块不会显示密码内容；两个密码文件都已存在时会在校验通过后继续复用，不会覆盖原密码；只有一个文件存在或内容无效时会停止当前代码块，但不会退出宿主机终端。
 
 要求：
 
@@ -307,12 +330,14 @@ chmod 0555 /data/module/nexus/postgresql-init/01-init-nexus.sh
 使用 `nexus-store.properties` 提供数据库配置，避免将数据库密码暴露在容器环境变量和 `docker inspect` 输出中。
 
 ```bash
+(
+set -Eeuo pipefail
+
 NEXUS_DB_PASSWORD="$(tr -d '\r\n' \
   < /data/module/nexus/secrets/nexus-db-password.txt)"
 
 if ! [[ "${NEXUS_DB_PASSWORD}" =~ ^[0-9a-f]{64}$ ]]; then
-  echo 'nexus 数据库密码格式不正确' >&2
-  unset NEXUS_DB_PASSWORD
+  echo 'nexus 数据库密码格式不正确，未写入数据源配置' >&2
   exit 1
 fi
 
@@ -322,13 +347,19 @@ password=${NEXUS_DB_PASSWORD}
 jdbcUrl=jdbc\:postgresql\://postgresql\:5432/nexus?currentSchema=nexus
 EOF
 
-unset NEXUS_DB_PASSWORD
-
 chown 200:200 \
   /data/module/nexus/data/etc/fabric/nexus-store.properties
 chmod 0600 \
   /data/module/nexus/data/etc/fabric/nexus-store.properties
+
+unset NEXUS_DB_PASSWORD
+
+stat -c '%u:%g %a %n' \
+  /data/module/nexus/data/etc/fabric/nexus-store.properties
+)
 ```
+
+结果必须显示 UID/GID `200:200`、权限 `600`。密码格式不正确时，本代码块会停止且不会退出当前宿主机终端。
 
 不得同时配置 `NEXUS_DATASTORE_NEXUS_*` 环境变量、JVM 数据源参数和 `nexus-store.properties`。本手册只使用属性文件这一种连接方式。
 
@@ -464,12 +495,33 @@ chmod 0640 /data/module/nexus/compose/compose.yml
 
 本配置不为 PostgreSQL 声明 `ports`，Nexus 与 Maven Central 的出站访问通过普通 bridge 网络完成。
 
+卷挂载末尾的 `:Z` 表示 Docker 为该容器设置 SELinux 私有标签。不要使用 `docker compose run nexus`，也不要使用另一个临时容器挂载 `/data/module/nexus/data` 做权限检查；这些操作可能重新标记生产目录，导致正式 Nexus 容器出现 `AccessDeniedException`。目录权限只使用第 5 节的宿主机 `stat` 命令检查，服务启动后需要进入容器时只使用 `docker compose exec`。
+
+如果已经误执行 `docker compose run nexus` 并导致正式 Nexus 容器无法访问数据目录，仅在这种情况下执行以下恢复命令；正常首次部署不要执行 `--force-recreate`：
+
+```bash
+(
+set -Eeuo pipefail
+cd /data/module/nexus/compose
+
+docker compose stop nexus
+docker compose up -d \
+  --no-deps \
+  --force-recreate nexus
+docker compose logs --since=5m --tail=300 nexus
+)
+```
+
 校验 Compose 最终配置：
 
 ```bash
+(
+set -Eeuo pipefail
 cd /data/module/nexus/compose
+
 docker compose config --quiet
 docker compose config --images
+)
 ```
 
 输出只能包含以下两个固定镜像：
@@ -486,45 +538,116 @@ sonatype/nexus3:3.94.1-ubi
 ### 9.1 启动 PostgreSQL
 
 ```bash
+(
+set -Eeuo pipefail
 cd /data/module/nexus/compose
+
 docker compose up -d postgresql
+
+postgres_ready=0
+for i in $(seq 1 60); do
+  if [ "$(docker inspect --format '{{.State.Health.Status}}' \
+    nexus-postgresql 2>/dev/null || true)" = 'healthy' ]; then
+    postgres_ready=1
+    break
+  fi
+  sleep 5
+done
+
+if [ "${postgres_ready}" -ne 1 ]; then
+  docker compose logs --since=10m --tail=300 postgresql
+  echo 'PostgreSQL 未在 5 分钟内进入 healthy 状态，停止部署' >&2
+  exit 1
+fi
+
 docker compose ps
-docker compose logs --tail=200 postgresql
+docker compose logs --since=5m --tail=200 postgresql
+echo 'PostgreSQL 已进入 healthy 状态'
+)
 ```
 
-等待 PostgreSQL 变为 `healthy`，然后验收数据库：
+以上代码块会自动等待 PostgreSQL 变为 `healthy`，无需手工反复查询。看到 `PostgreSQL 已进入 healthy 状态` 后，整块执行以下数据库验收命令：
 
 ```bash
-docker compose exec -T postgresql \
-  psql -U postgres -d postgres -c \
-  "SELECT datname, pg_get_userbyid(datdba) AS owner FROM pg_database WHERE datname='nexus';"
+(
+set -Eeuo pipefail
+cd /data/module/nexus/compose
 
-docker compose exec -T postgresql \
-  psql -U postgres -d nexus -c \
-  "SELECT nspname, nspowner::regrole FROM pg_namespace WHERE nspname='nexus';"
+DB_OWNER="$(docker compose exec -T --user postgres postgresql \
+  psql -X -v ON_ERROR_STOP=1 -At \
+  -U postgres -d postgres -c \
+  "SELECT pg_get_userbyid(datdba) FROM pg_database WHERE datname='nexus';")"
 
-docker compose exec -T postgresql \
-  psql -U postgres -d nexus -c \
-  "SELECT extname, extowner::regrole, extnamespace::regnamespace FROM pg_extension WHERE extname='pg_trgm';"
+SCHEMA_OWNER="$(docker compose exec -T --user postgres postgresql \
+  psql -X -v ON_ERROR_STOP=1 -At \
+  -U postgres -d nexus -c \
+  "SELECT nspowner::regrole::text FROM pg_namespace WHERE nspname='nexus';")"
 
-docker compose exec -T postgresql \
-  psql -U postgres -d postgres -c '\du nexus'
+EXTENSION_OWNER="$(docker compose exec -T --user postgres postgresql \
+  psql -X -v ON_ERROR_STOP=1 -At \
+  -U postgres -d nexus -c \
+  "SELECT extowner::regrole::text || '|' || extnamespace::regnamespace::text FROM pg_extension WHERE extname='pg_trgm';")"
+
+ROLE_FLAGS="$(docker compose exec -T --user postgres postgresql \
+  psql -X -v ON_ERROR_STOP=1 -At \
+  -U postgres -d postgres -c \
+  "SELECT rolsuper, rolcreatedb, rolcreaterole, rolreplication, rolbypassrls FROM pg_roles WHERE rolname='nexus';")"
+
+NEXUS_LOGIN="$(docker compose exec -T --user postgres postgresql \
+  /bin/sh -ec '
+    NEXUS_DB_PASSWORD="$(tr -d "\r\n" < /run/secrets/nexus_db_password)"
+    export PGPASSWORD="${NEXUS_DB_PASSWORD}"
+    psql -X -v ON_ERROR_STOP=1 -At \
+      -h 127.0.0.1 -U nexus -d nexus \
+      -c "SELECT current_user;"
+  ')"
+
+if [ "${DB_OWNER}" != 'nexus' ] \
+  || [ "${SCHEMA_OWNER}" != 'nexus' ] \
+  || [ "${EXTENSION_OWNER}" != 'nexus|nexus' ] \
+  || [ "${ROLE_FLAGS}" != 'f|f|f|f|f' ] \
+  || [ "${NEXUS_LOGIN}" != 'nexus' ]; then
+  printf '%s\n' \
+    "database_owner=${DB_OWNER}" \
+    "schema_owner=${SCHEMA_OWNER}" \
+    "extension_owner_and_schema=${EXTENSION_OWNER}" \
+    "role_flags=${ROLE_FLAGS}" \
+    "password_login_user=${NEXUS_LOGIN}" >&2
+  echo 'PostgreSQL 初始化验收未通过，停止部署' >&2
+  exit 1
+fi
+
+printf '%s\n' \
+  "database_owner=${DB_OWNER}" \
+  "schema_owner=${SCHEMA_OWNER}" \
+  "extension_owner_and_schema=${EXTENSION_OWNER}" \
+  "role_flags=${ROLE_FLAGS}" \
+  "password_login_user=${NEXUS_LOGIN}" \
+  'PostgreSQL 初始化验收通过'
+)
 ```
 
-数据库、schema、扩展所有者必须为 `nexus`，且该角色不得显示 Superuser、Create role 或 Create DB。
+最后一行必须显示 `PostgreSQL 初始化验收通过`。该代码块会自动确认数据库、schema 和 `pg_trgm` 扩展所有者均为 `nexus`，确认该角色没有超级用户、建库、建角色、复制或绕过行级安全权限，并使用密码通过 TCP 实际登录一次。
 
 ### 9.2 启动 Nexus
 
 ```bash
+(
+set -Eeuo pipefail
 cd /data/module/nexus/compose
+
 docker compose up -d nexus
 docker compose ps
-docker compose logs --tail=300 nexus
+docker compose logs --since=5m --tail=300 nexus
+)
 ```
 
-首次启动通常需要数分钟。等待状态接口返回成功：
+首次启动通常需要数分钟。日志中的 `Custom memory flags detected` 是 Compose 已显式设置 JVM 内存参数的提示，不是报错；出现 `Starting nexus with edition COMMUNITY` 只表示正在启动，不能作为就绪依据。整块执行以下命令，以状态接口返回成功作为唯一的本机启动完成标准：
 
 ```bash
+(
+set -Eeuo pipefail
+
 ready=0
 for i in $(seq 1 60); do
   if curl -fsS \
@@ -538,13 +661,18 @@ for i in $(seq 1 60); do
 done
 
 if [ "${ready}" -ne 1 ]; then
+  cd /data/module/nexus/compose
+  docker compose logs --since=10m --tail=300 nexus
   echo 'Nexus 未在 10 分钟内进入可写状态' >&2
   exit 1
 fi
 
 curl -fsS http://127.0.0.1:18082/service/rest/v1/status
 curl -fsS http://127.0.0.1:18082/service/rest/v1/status/writable
+)
 ```
+
+该等待代码块失败时只停止当前代码块，不会退出宿主机终端，并会自动显示最近 10 分钟的 Nexus 日志。
 
 确认端口没有错误暴露：
 
@@ -565,50 +693,117 @@ docker inspect --format \
 - Nexus/PostgreSQL 的内存、CPU 和 PID 限制与 Compose 一致；
 - 日志中不得出现 H2 JDBC URL、数据库鉴权失败或 schema 初始化失败。
 
----
+### 9.3 当前阶段的访问方式
 
-## 10. 配置 Nginx HTTPS
+完成第 9 节后，Nexus 虽然已经启动，但此时还不能从其他电脑使用浏览器访问。Compose 将 Nexus 端口固定绑定为：
 
-### 10.1 安装证书
-
-将生产证书和私钥放入约定目录，替换示例域名：
-
-```bash
-chown root:root \
-  /data/module/nginx/conf/certs/nexus.example.com.crt \
-  /data/module/nginx/conf/certs/nexus.example.com.key
-
-chmod 0644 /data/module/nginx/conf/certs/nexus.example.com.crt
-chmod 0600 /data/module/nginx/conf/certs/nexus.example.com.key
+```text
+127.0.0.1:18082:8081
 ```
 
-不得使用自签名证书作为团队生产入口。使用企业内部 CA 时，必须将根证书统一下发到开发机、构建机和 JDK 信任库。
+`127.0.0.1` 是 Nexus 宿主机自身的回环地址，因此 `18082` 只接受来自宿主机本机的连接。即使外层防火墙没有限制 `18082`，其他电脑访问 `http://服务器IP:18082/` 也不会成功。
 
-### 10.2 写入站点配置
-
-以下配置中的 `nexus.example.com` 必须全部替换为正式域名：
+当前阶段只使用宿主机上的以下状态接口验证 Nexus，不要把端口绑定修改为 `0.0.0.0:18082`：
 
 ```bash
-cat > /data/module/nginx/conf/conf.d/nexus.conf << 'EOF'
+curl -fsS http://127.0.0.1:18082/service/rest/v1/status
+curl -fsS http://127.0.0.1:18082/service/rest/v1/status/writable
+```
+
+继续完成第 10 节并选择一个 Nginx 访问分支后，才能从受信客户端浏览器访问：域名 HTTPS 分支使用 `https://正式域名:18483/`，内网 IP HTTP 分支使用 `http://固定内网IP:18083/`。首次登录和初始化操作按第 11 节执行。
+
+---
+
+## 10. 配置 Nginx 访问入口
+
+### 10.1 选择访问方式
+
+本节提供两个互斥分支，只执行符合现场条件的一个分支，然后继续执行第 10.4 节和第 10.5 节：
+
+| 分支 | 适用条件 | 最终访问地址 | 安全说明 |
+| --- | --- | --- | --- |
+| A. 域名 + HTTPS | 具备正式域名和受信任证书 | `https://正式域名:18483/` | 推荐，账号密码和制品传输均由 TLS 保护 |
+| B. 固定内网 IP + HTTP | 没有域名，且无法取得任何可被客户端信任的证书 | `http://固定内网IP:18083/` | 仅用于受信公司内网；账号密码和制品内容不会被加密 |
+
+不得同时执行两个分支。分支 B 是现场条件受限时的兼容方案，不得暴露到公网、访客网络、办公无线网络或不受控终端所在网段；具备证书条件后应迁移到分支 A。
+
+### 10.2 分支 A：域名 + HTTPS
+
+提前将生产证书和私钥放入 `/data/module/nginx/conf/certs`。证书文件名必须是 `<正式域名>.crt`，私钥文件名必须是 `<正式域名>.key`。
+
+以下代码块只需要修改第一行 `NEXUS_DOMAIN`，然后整块执行。保留示例域名、域名格式错误、证书缺失、证书已过期、私钥加密或证书与私钥不匹配时，代码块会在写入 Nginx 配置前停止。
+
+```bash
+(
+set -Eeuo pipefail
+
+NEXUS_DOMAIN='nexus.example.com'
+
+if [ "${NEXUS_DOMAIN}" = 'nexus.example.com' ] \
+  || ! [[ "${NEXUS_DOMAIN}" =~ ^[A-Za-z0-9][A-Za-z0-9.-]*[A-Za-z0-9]$ ]] \
+  || [[ "${NEXUS_DOMAIN}" != *.* ]]; then
+  echo '请把 NEXUS_DOMAIN 替换为不带协议和端口的正式域名' >&2
+  exit 1
+fi
+
+CERT_FILE="/data/module/nginx/conf/certs/${NEXUS_DOMAIN}.crt"
+KEY_FILE="/data/module/nginx/conf/certs/${NEXUS_DOMAIN}.key"
+
+if [ ! -s "${CERT_FILE}" ] || [ ! -s "${KEY_FILE}" ]; then
+  echo "证书或私钥不存在：${CERT_FILE} / ${KEY_FILE}" >&2
+  exit 1
+fi
+
+if grep -q 'ENCRYPTED' "${KEY_FILE}"; then
+  echo 'Nginx 生产私钥不能使用需要人工输入口令的加密格式' >&2
+  exit 1
+fi
+
+openssl x509 -in "${CERT_FILE}" -noout -checkend 86400
+openssl pkey -in "${KEY_FILE}" -noout
+
+CERT_PUBLIC_KEY="$(
+  openssl x509 -in "${CERT_FILE}" -pubkey -noout \
+    | openssl pkey -pubin -outform DER \
+    | sha256sum \
+    | awk '{print $1}'
+)"
+
+KEY_PUBLIC_KEY="$(
+  openssl pkey -in "${KEY_FILE}" -pubout -outform DER \
+    | sha256sum \
+    | awk '{print $1}'
+)"
+
+if [ "${CERT_PUBLIC_KEY}" != "${KEY_PUBLIC_KEY}" ]; then
+  echo 'TLS 证书与私钥不匹配' >&2
+  exit 1
+fi
+
+chown root:root "${CERT_FILE}" "${KEY_FILE}"
+chmod 0644 "${CERT_FILE}"
+chmod 0600 "${KEY_FILE}"
+
+cat > /data/module/nginx/conf/conf.d/nexus.conf << EOF
 upstream nexus_repository {
     server 127.0.0.1:18082;
     keepalive 32;
 }
 
 server {
-    listen 18080;
-    server_name nexus.example.com;
+    listen 18083;
+    server_name ${NEXUS_DOMAIN};
 
-    return 301 https://nexus.example.com:18443$request_uri;
+    return 301 https://${NEXUS_DOMAIN}:18483\$request_uri;
 }
 
 server {
-    listen 18443 ssl;
+    listen 18483 ssl;
     http2 on;
-    server_name nexus.example.com;
+    server_name ${NEXUS_DOMAIN};
 
-    ssl_certificate     /data/module/nginx/conf/certs/nexus.example.com.crt;
-    ssl_certificate_key /data/module/nginx/conf/certs/nexus.example.com.key;
+    ssl_certificate     ${CERT_FILE};
+    ssl_certificate_key ${KEY_FILE};
     ssl_protocols TLSv1.2 TLSv1.3;
     ssl_session_cache shared:NEXUS_SSL:10m;
     ssl_session_timeout 1d;
@@ -624,12 +819,12 @@ server {
         proxy_http_version 1.1;
         proxy_set_header Connection "";
 
-        proxy_set_header Host $http_host;
-        proxy_set_header X-Real-IP $remote_addr;
-        proxy_set_header X-Forwarded-For $proxy_add_x_forwarded_for;
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
         proxy_set_header X-Forwarded-Proto https;
-        proxy_set_header X-Forwarded-Host $host;
-        proxy_set_header X-Forwarded-Port 18443;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port 18483;
 
         proxy_connect_timeout 10s;
         proxy_send_timeout 600s;
@@ -643,44 +838,125 @@ EOF
 
 chown root:root /data/module/nginx/conf/conf.d/nexus.conf
 chmod 0644 /data/module/nginx/conf/conf.d/nexus.conf
+
+openssl x509 -in "${CERT_FILE}" -noout -subject -issuer -dates
+echo "Nginx 站点配置已生成：https://${NEXUS_DOMAIN}:18483/"
+)
 ```
 
-如果 SELinux 为 Enforcing，允许 Nginx 连接回环上游：
+不得使用自签名证书作为团队生产入口。使用企业内部 CA 时，必须将根证书统一下发到开发机、构建机和 JDK 信任库。
+
+### 10.3 分支 B：固定内网 IP + HTTP
+
+只有在没有域名且无法取得任何可被客户端信任的证书时才使用本分支。以下代码块只需要把第一行 `NEXUS_IP` 修改为 Nexus 宿主机的固定公司内网 IPv4 地址，然后整块执行。
 
 ```bash
+(
+set -Eeuo pipefail
+
+NEXUS_IP='192.0.2.10'
+
+if [ "${NEXUS_IP}" = '192.0.2.10' ] \
+  || ! [[ "${NEXUS_IP}" =~ ^([0-9]{1,3}\.){3}[0-9]{1,3}$ ]]; then
+  echo '请把 NEXUS_IP 替换为 Nexus 宿主机的固定公司内网 IPv4 地址' >&2
+  exit 1
+fi
+
+IFS=. read -r IP1 IP2 IP3 IP4 <<< "${NEXUS_IP}"
+for OCTET in "${IP1}" "${IP2}" "${IP3}" "${IP4}"; do
+  if [ "$((10#${OCTET}))" -gt 255 ]; then
+    echo "IPv4 地址格式不正确：${NEXUS_IP}" >&2
+    exit 1
+  fi
+done
+
+if ! ip -4 -o addr show scope global \
+  | awk '{print $4}' \
+  | cut -d/ -f1 \
+  | grep -Fxq "${NEXUS_IP}"; then
+  echo "该 IPv4 地址不属于当前宿主机：${NEXUS_IP}" >&2
+  exit 1
+fi
+
+cat > /data/module/nginx/conf/conf.d/nexus.conf << EOF
+upstream nexus_repository {
+    server 127.0.0.1:18082;
+    keepalive 32;
+}
+
+server {
+    listen ${NEXUS_IP}:18083;
+    server_name ${NEXUS_IP};
+
+    client_max_body_size 5g;
+    client_body_timeout 600s;
+
+    access_log /data/module/nginx/logs/nexus.access.log main;
+    error_log  /data/module/nginx/logs/nexus.error.log warn;
+
+    location / {
+        proxy_pass http://nexus_repository;
+        proxy_http_version 1.1;
+        proxy_set_header Connection "";
+
+        proxy_set_header Host \$http_host;
+        proxy_set_header X-Real-IP \$remote_addr;
+        proxy_set_header X-Forwarded-For \$proxy_add_x_forwarded_for;
+        proxy_set_header X-Forwarded-Proto http;
+        proxy_set_header X-Forwarded-Host \$host;
+        proxy_set_header X-Forwarded-Port 18083;
+
+        proxy_connect_timeout 10s;
+        proxy_send_timeout 600s;
+        proxy_read_timeout 600s;
+        proxy_request_buffering off;
+        proxy_buffering off;
+        proxy_redirect off;
+    }
+}
+EOF
+
+chown root:root /data/module/nginx/conf/conf.d/nexus.conf
+chmod 0644 /data/module/nginx/conf/conf.d/nexus.conf
+
+echo "Nginx 内网 IP 站点配置已生成：http://${NEXUS_IP}:18083/"
+echo '警告：该入口使用 HTTP，账号密码和制品内容不会被加密'
+)
+```
+
+该分支不得开放 `18483`，也不得把 `18083` 放通到整个公司网络。网络策略必须只允许实际需要使用 Nexus 的研发网段、构建网段和运维来源地址访问。
+
+### 10.4 加载站点配置
+
+在宿主机上以 `root` 用户整块执行。SELinux 为 `Enforcing` 时，命令会永久允许 Nginx 连接 Nexus 的 `127.0.0.1:18082`；SELinux 为 `Permissive` 或 `Disabled` 时不会修改 SELinux：
+
+```bash
+(
+set -Eeuo pipefail
+
 if [ "$(getenforce)" = 'Enforcing' ]; then
   setsebool -P httpd_can_network_connect 1
+  getsebool httpd_can_network_connect
 fi
-```
 
-上述布尔值只处理 Nginx 连接上游的权限。SELinux 为 Enforcing 时，还必须依据企业 SELinux 策略为 `/data/module/nginx` 的配置、证书、日志和运行目录配置持久化 file context，并通过 `ausearch -m AVC -ts recent` 复核；存在未处理的 AVC 拒绝时停止上线，不得直接关闭 SELinux 规避。
-
-校验并加载配置：
-
-```bash
 /data/module/nginx/sbin/nginx -t
 systemctl reload nginx
-systemctl status nginx --no-pager
+systemctl is-active --quiet nginx
+echo 'Nginx 配置校验通过并已重新加载'
+)
 ```
 
-### 10.3 配置网络边界
+### 10.5 配置网络边界 （可忽略）
 
 CentOS 7.9 初始化基线默认关闭本机 `firewalld`，不得为 Nexus 单独启用。由网络或运维人员在外层防火墙、安全组、ACL、VPN 或统一网络策略中执行：
 
-- 只允许研发网、构建网和批准的代理出口访问 `18080/18443`；
+- 域名 HTTPS 分支只允许研发网、构建网和批准的代理出口访问 `18083/18483`；
+- 内网 IP HTTP 分支只允许明确的研发、构建和运维来源地址访问 `18083`，不得开放 `18483`；
 - 不为 `18082` 或 `5432` 配置外部入站规则；
 - 将来源网段、端口和用途登记到网络策略及资产台账；
 - 需要公网接入时，由统一入口完成 WAF、TLS 和 NAT，Nexus 宿主机不得直接暴露公网。
 
 如果现场原本启用了 `firewalld`，按《CentOS 7.9 生产环境初始化手册》的现场例外流程增加同等来源限制，不得直接使用无来源约束的 `--add-port`。
-
-验证 HTTPS：
-
-```bash
-curl --fail --silent --show-error \
-  --resolve nexus.example.com:18443:127.0.0.1 \
-  https://nexus.example.com:18443/service/rest/v1/status/writable
-```
 
 ---
 
@@ -688,17 +964,22 @@ curl --fail --silent --show-error \
 
 ### 11.1 完成首次登录
 
-读取一次性管理员密码：
+整块执行以下命令读取一次性管理员密码：
 
 ```bash
+(
+set -Eeuo pipefail
 cd /data/module/nexus/compose
+
 docker compose exec nexus cat /nexus-data/admin.password
+)
 ```
 
-访问：
+从受信客户端浏览器访问所选分支的地址。能够正常打开 Nexus 登录页面，即完成了浏览器、Nginx 和 Nexus 的实际访问验证：
 
 ```text
-https://nexus.example.com:18443/
+域名 HTTPS 分支：https://正式域名:18483/
+内网 IP HTTP 分支：http://固定内网IP:18083/
 ```
 
 使用 `admin` 登录并立即执行：
@@ -707,7 +988,7 @@ https://nexus.example.com:18443/
 2. 关闭 Anonymous Access；
 3. 创建实名运维管理员，授予 `nx-admin`；
 4. 将内置 `admin` 作为受控的应急账号，不用于日常操作；
-5. 在 Base URL capability 中设置 `https://nexus.example.com:18443/`；
+5. 在 Base URL capability 中设置为当前浏览器使用的完整访问地址；
 6. 保持 HTTP Forwarded Headers capability 启用；
 7. 确认 Data Store 显示 PostgreSQL JDBC URL，不得显示 H2。
 
@@ -733,12 +1014,12 @@ Blob Store 的 Soft Quota 按实际磁盘规划设置为容量上限的 80%。�
 | `maven-central` | `maven2 (proxy)` | `maven-cache` | Remote storage=`https://repo.maven.apache.org/maven2/`；Version policy=`Release`；Layout policy=`Strict`；启用 Content Type Validation |
 | `maven-public` | `maven2 (group)` | `maven-cache` | Version policy=`Mixed`；成员依次为 `maven-releases`、`maven-snapshots`、`maven-central` |
 
-仓库地址：
+将 `__NEXUS_BASE_URL__` 替换为所选分支的浏览器访问地址，末尾不要添加 `/`：
 
 ```text
-读取聚合仓库：https://nexus.example.com:18443/repository/maven-public/
-Release 发布：https://nexus.example.com:18443/repository/maven-releases/
-Snapshot 发布：https://nexus.example.com:18443/repository/maven-snapshots/
+读取聚合仓库：__NEXUS_BASE_URL__/repository/maven-public/
+Release 发布：__NEXUS_BASE_URL__/repository/maven-releases/
+Snapshot 发布：__NEXUS_BASE_URL__/repository/maven-snapshots/
 ```
 
 ### 11.4 创建最小权限角色和账号
@@ -787,7 +1068,7 @@ nx-repository-view-maven2-maven-releases-*
 
 ### 12.1 团队 `settings.xml` 模板
 
-开发机和构建机统一使用以下模板，实际账号密码通过环境变量注入：
+开发机和构建机统一使用以下模板。分发模板前，将其中全部 `__NEXUS_BASE_URL__` 替换为当前浏览器使用的 Nexus 访问地址，末尾不要添加 `/`。例如域名 HTTPS 分支替换为 `https://nexus.example.com:18483`，内网 IP HTTP 分支替换为 `http://10.10.10.20:18083`。实际账号密码通过环境变量注入：
 
 ```xml
 <?xml version="1.0" encoding="UTF-8"?>
@@ -798,7 +1079,7 @@ nx-repository-view-maven2-maven-releases-*
     <mirror>
       <id>nexus-mirror</id>
       <name>Company Nexus</name>
-      <url>https://nexus.example.com:18443/repository/maven-public/</url>
+      <url>__NEXUS_BASE_URL__/repository/maven-public/</url>
       <mirrorOf>*</mirrorOf>
     </mirror>
   </mirrors>
@@ -827,7 +1108,7 @@ nx-repository-view-maven2-maven-releases-*
       <repositories>
         <repository>
           <id>nexus-public</id>
-          <url>https://nexus.example.com:18443/repository/maven-public/</url>
+          <url>__NEXUS_BASE_URL__/repository/maven-public/</url>
           <releases><enabled>true</enabled></releases>
           <snapshots><enabled>true</enabled></snapshots>
         </repository>
@@ -835,7 +1116,7 @@ nx-repository-view-maven2-maven-releases-*
       <pluginRepositories>
         <pluginRepository>
           <id>nexus-public-plugins</id>
-          <url>https://nexus.example.com:18443/repository/maven-public/</url>
+          <url>__NEXUS_BASE_URL__/repository/maven-public/</url>
           <releases><enabled>true</enabled></releases>
           <snapshots><enabled>true</enabled></snapshots>
         </pluginRepository>
@@ -852,24 +1133,37 @@ nx-repository-view-maven2-maven-releases-*
 个人文件保存到 `~/.m2/settings.xml` 并执行：
 
 ```bash
-chmod 0600 ~/.m2/settings.xml
+(
+set -Eeuo pipefail
+
+SETTINGS_FILE="${HOME}/.m2/settings.xml"
+test -s "${SETTINGS_FILE}"
+
+if grep -q '__NEXUS_BASE_URL__' "${SETTINGS_FILE}"; then
+  echo 'settings.xml 中的 __NEXUS_BASE_URL__ 尚未替换' >&2
+  exit 1
+fi
+
+chmod 0600 "${SETTINGS_FILE}"
+echo 'settings.xml 地址占位符检查通过'
+)
 ```
 
-禁止使用 `maven.wagon.http.ssl.insecure=true` 或关闭证书校验来绕过 TLS 问题。
+域名 HTTPS 分支禁止使用 `maven.wagon.http.ssl.insecure=true` 或关闭证书校验来绕过 TLS 问题。内网 IP HTTP 分支不提供传输加密，客户端只能从第 10.5 节限定的受信网络接入。
 
 ### 12.2 项目发布配置
 
-项目 POM 使用与 `settings.xml` 一致的 Server ID：
+项目 POM 使用与 `settings.xml` 一致的 Server ID。提交 POM 前，同样将 `__NEXUS_BASE_URL__` 替换为当前浏览器使用的 Nexus 访问地址：
 
 ```xml
 <distributionManagement>
   <repository>
     <id>nexus-releases</id>
-    <url>https://nexus.example.com:18443/repository/maven-releases/</url>
+    <url>__NEXUS_BASE_URL__/repository/maven-releases/</url>
   </repository>
   <snapshotRepository>
     <id>nexus-snapshots</id>
-    <url>https://nexus.example.com:18443/repository/maven-snapshots/</url>
+    <url>__NEXUS_BASE_URL__/repository/maven-snapshots/</url>
   </snapshotRepository>
 </distributionManagement>
 ```
@@ -888,7 +1182,7 @@ Release 只能由受控流水线执行，普通开发账号不得持有 Release 
 - PostgreSQL 全局角色备份；
 - 完整 `/nexus-data`，其中必须包含 Blob、配置、密钥库和节点标识目录 `/nexus-data/keystores/node/`；
 - Compose、初始化脚本、数据库连接属性和密钥文件；
-- 镜像摘要和校验文件。
+- 备份内容和最终加密归档的校验文件。
 
 备份期间先优雅停止 Nexus，PostgreSQL 保持运行以执行逻辑备份。停止宽限期不得少于 120 秒。
 
@@ -905,15 +1199,22 @@ gpg2 --import /root/nexus-backup-public.asc
 gpg2 --list-keys --with-fingerprint
 
 BACKUP_GPG_FINGERPRINT='替换为40位十六进制公钥指纹'
-printf '%s\n' "${BACKUP_GPG_FINGERPRINT}" \
-  > /data/module/nexus/secrets/backup-gpg-recipient.txt
 
-chown root:root \
-  /data/module/nexus/secrets/backup-gpg-recipient.txt
-chmod 0400 \
-  /data/module/nexus/secrets/backup-gpg-recipient.txt
+if [[ "${BACKUP_GPG_FINGERPRINT}" =~ ^[0-9A-Fa-f]{40}$ ]] \
+  && gpg2 --batch --list-keys "${BACKUP_GPG_FINGERPRINT}" \
+    >/dev/null 2>&1; then
+  install -m 0600 -o root -g root /dev/null \
+    /data/module/nexus/secrets/backup-gpg-recipient.txt
+  printf '%s\n' "${BACKUP_GPG_FINGERPRINT}" \
+    > /data/module/nexus/secrets/backup-gpg-recipient.txt
+  chmod 0400 \
+    /data/module/nexus/secrets/backup-gpg-recipient.txt
 
-gpg2 --batch --list-keys "${BACKUP_GPG_FINGERPRINT}"
+  gpg2 --batch --list-keys "${BACKUP_GPG_FINGERPRINT}"
+else
+  echo '公钥指纹未替换、格式错误或对应公钥不存在，未写入配置' >&2
+fi
+
 unset BACKUP_GPG_FINGERPRINT
 ```
 
@@ -925,7 +1226,6 @@ unset BACKUP_GPG_FINGERPRINT
 cat > /data/module/nexus/compose/backup.sh << 'EOF'
 #!/usr/bin/env bash
 set -Eeuo pipefail
-umask 077
 
 COMPOSE_DIR=/data/module/nexus/compose
 BACKUP_ROOT=/data/backup/nexus
@@ -965,17 +1265,17 @@ cleanup() {
 }
 trap cleanup EXIT
 
-mkdir -p "${BACKUP_DIR}"
+install -d -m 0700 -o root -g root "${BACKUP_DIR}"
 cd "${COMPOSE_DIR}"
 
 docker compose stop -t 120 nexus
 nexus_stopped=1
 
-docker compose exec -T postgresql \
+docker compose exec -T --user postgres postgresql \
   pg_dump -U postgres -d nexus -Fc \
   > "${BACKUP_DIR}/nexus.dump"
 
-docker compose exec -T postgresql \
+docker compose exec -T --user postgres postgresql \
   pg_dumpall -U postgres --globals-only \
   > "${BACKUP_DIR}/globals.sql"
 
@@ -998,6 +1298,8 @@ tar --xattrs --acls --numeric-owner \
   mv nexus-backup.tar.gpg.tmp nexus-backup.tar.gpg
   sha256sum nexus-backup.tar.gpg \
     > nexus-backup.tar.gpg.sha256
+
+  chmod 0600 nexus-backup.tar.gpg nexus-backup.tar.gpg.sha256
 
   rm -f -- nexus.dump globals.sql nexus-files.tar.gz SHA256SUMS
 )
@@ -1119,7 +1421,7 @@ docker compose up -d postgresql
 
 postgres_ready=0
 for i in $(seq 1 30); do
-  if docker compose exec -T postgresql \
+  if docker compose exec -T --user postgres postgresql \
     pg_isready -h 127.0.0.1 -U postgres -d postgres; then
     postgres_ready=1
     break
@@ -1132,17 +1434,17 @@ if [ "${postgres_ready}" -ne 1 ]; then
   exit 1
 fi
 
-docker compose exec -T postgresql \
+docker compose exec -T --user postgres postgresql \
   psql -U postgres -d postgres -c \
   "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='nexus' AND pid <> pg_backend_pid();"
 
-docker compose exec -T postgresql \
+docker compose exec -T --user postgres postgresql \
   dropdb -U postgres --if-exists nexus
 
-docker compose exec -T postgresql \
+docker compose exec -T --user postgres postgresql \
   createdb -U postgres -O nexus -E UTF8 -T template0 nexus
 
-docker compose exec -T postgresql \
+docker compose exec -T --user postgres postgresql \
   pg_restore -U postgres -d nexus \
   --exit-on-error --no-owner --role=nexus \
   < "${BACKUP_DIR}/nexus.dump"
@@ -1153,7 +1455,7 @@ docker compose exec -T postgresql \
 验证扩展和所有者：
 
 ```bash
-docker compose exec -T postgresql \
+docker compose exec -T --user postgres postgresql \
   psql -U postgres -d nexus -c \
   "SELECT extname, extowner::regrole, extnamespace::regnamespace FROM pg_extension WHERE extname='pg_trgm';"
 ```
@@ -1198,9 +1500,8 @@ docker compose logs --tail=300 nexus
 1. 阅读目标版本 Release Notes、升级路径和 PostgreSQL 要求；
 2. 运行第 13 节备份并验证校验和；
 3. 在隔离环境用备份副本完成升级和 Maven 回归；
-4. 记录新镜像 tag 与 digest；
-5. 预留至少 120 秒停止时间和足够数据库迁移时间；
-6. Nexus 与 PostgreSQL 大版本不得在同一个变更窗口同时升级。
+4. 预留至少 120 秒停止时间和足够数据库迁移时间；
+5. Nexus 与 PostgreSQL 大版本不得在同一个变更窗口同时升级。
 
 修改为已验证的固定 Nexus 镜像后执行：
 
@@ -1254,15 +1555,16 @@ Nexus Status API 不检查外部 PostgreSQL 可达性和磁盘读写，必须同
 
 ### 16.2 最终验收清单
 
-- [ ] 镜像运行门禁通过，实际 digest 已记录；
+- [ ] 镜像基础运行检查通过；
 - [ ] Nexus 版本为 `3.94.1-06`，使用 `3.94.1-ubi` 镜像；
 - [ ] PostgreSQL 版本为 `17.10`，容器状态为 `healthy`；
 - [ ] Nexus 数据源为 PostgreSQL，不是 H2；
 - [ ] `/service/rest/v1/status/writable` 返回成功；
 - [ ] `nexus` 是数据库、schema 和 `pg_trgm` 的所有者，但不是超级用户；
 - [ ] PostgreSQL 没有宿主机端口，Nexus 只绑定 `127.0.0.1:18082`；
-- [ ] HTTPS 证书链、域名和有效期正确，HTTP 能跳转到 HTTPS；
-- [ ] 外层网络策略只向受信网段开放 `18080/18443`；
+- [ ] 第 10 节只执行了一个访问分支，并能从受信客户端浏览器打开 Nexus 登录页面；
+- [ ] 域名 HTTPS 分支的证书链、域名和有效期正确，HTTP 能跳转到 HTTPS；或内网 IP HTTP 分支只监听固定内网 IP 的 `18083`；
+- [ ] 外层网络策略仅向明确的受信来源开放所选分支所需端口，未开放 `18082/5432`；
 - [ ] 匿名访问已关闭；
 - [ ] Reader、Snapshot Publisher、Release Publisher 权限验证通过；
 - [ ] 发布账号没有 delete 权限；
