@@ -10,6 +10,7 @@
 - openEuler 24.03 LTS 相关文档统一维护在 `openeuler24.03/`。
 - Ubuntu Server 24.04 LTS 相关文档统一维护在 `ubuntu24.04/`。
 - 跨发行版的 Linux 通用文档统一维护在 `linux/`，避免操作系统初始化手册重复承载组件部署细节。
+- Windows 宿主机、VMware 虚拟化和 Windows Server 本机实验文档统一维护在 `windows/`。
 - 涉及技术决策时，在撰写过程中至少评估三个方案并确定推荐项；最终实施手册只保留已确认的结论和执行步骤，不保留方案比较过程干扰实施人员。
 - 配置手册以“简单直接、结果优先、可复制执行”为准，只保留安装、最终配置、启动、备份与回滚；不写教程、方案比较、参数原理、重复验收和常见问题。
 - 示例中的版本、路径、端口和密码不能直接视为现场值，上线前必须重新核验官方资料并完成环境确认。
@@ -62,6 +63,10 @@ export REDIS_HOME=/data/module/redis7.2
 ## Linux 通用文档
 
 - [NVM 与 Node.js 生产环境配置手册](linux/NVM与Node.js生产环境配置手册.md)
+
+## Windows 与虚拟化
+
+- [VMware Workstation 安装与 Windows Server 虚拟机部署教程](windows/VMwareWorkstation安装与WindowsServer虚拟机部署教程.md)
 
 ## 安全与加解密
 
