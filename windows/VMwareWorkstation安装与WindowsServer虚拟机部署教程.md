@@ -229,6 +229,35 @@ Windows Server 采用 LTSC 模式，每个版本提供 5 年主流支持和 5 �
 
 > 生命周期日期以微软官方生命周期页面为准，选型前应再次核对。
 
+### 4.1.1 三种授权版本速查
+
+Windows Server 按授权分为 Essentials、Standard、Datacenter 三档。其中 Essentials 仅存在于 2016 和 2019，微软自 Windows Server 2022 起已取消该版本，新部署只能在 Standard 和 Datacenter 之间选择。
+
+| 对比项 | Essentials | Standard | Datacenter |
+| --- | --- | --- | --- |
+| 可用版本 | 仅 2016 / 2019 | 2016 / 2019 / 2022 / 2025 | 2016 / 2019 / 2022 / 2025 |
+| 适用规模 | 25 用户 / 50 设备以内的小型企业 | 中小规模，单机或少量虚拟化 | 中大规模，私有云与高密度虚拟化 |
+| 虚拟化授权 | 不支持作为虚拟化宿主 | 每许可证覆盖 2 个虚拟机 | 不限虚拟机数量 |
+| CPU 授权 | 按服务器，不限核心 | 按核心授权，最低 16 核 | 按核心授权，最低 16 核 |
+| 内存上限 | 64 GB | 按版本，2025 为 4 TB | 按版本，2025 为 4 TB |
+| 存储空间直通（S2D） | 不支持 | 不支持 | 支持 |
+| 软件定义网络（SDN） | 不支持 | 不支持 | 支持 |
+| 屏蔽虚拟机 | 不支持 | 不支持 | 支持 |
+| 存储副本 | 不支持 | 仅单伙伴 | 不限伙伴 |
+| 图形界面 | 仅 Desktop Experience | Core / Desktop 可选 | Core / Desktop 可选 |
+| 远程访问 | 简化管理控制台（无 RDS） | 支持 RDS（需另购 CAL） | 支持 RDS（需另购 CAL） |
+| 许可成本 | 最低 | 中 | 最高 |
+| 推荐场景 | 存量小型办公环境 | 单机部署、实验、少量虚机 | 大规模虚拟化、私有云 |
+
+选型原则：
+
+1. 新项目不选 Essentials。该版本已停止在新版本中提供，且不支持虚拟化，功能受限。
+2. 实验和单机部署选 Standard，成本低且功能完整。
+3. 需要在一台物理机上运行超过 2 个 Windows Server 虚机，或需要 S2D、SDN、屏蔽虚拟机时选 Datacenter。
+4. 授权按核心计算，采购前必须核对物理 CPU 核心数、CAL 数量和微软当期的授权条款。
+
+> 上表的能力差异以 Windows Server 2025 为准。2016/2019 的 Essentials 在内存上限和用户数限制上与 2025 的 Standard 不同，实际采购应以微软产品条款和授权指南为准。
+
 ### 4.2 Standard 与 Datacenter 的区别
 
 | 能力 | Standard | Datacenter |
@@ -1030,6 +1059,12 @@ Test-NetConnection 223.5.5.5 -Port 53
 > 上述站点可能改版，链接失效时请从对应厂商首页搜索产品名称进入。下载前必须核对当前版本号和校验值。
 
 
+
+
+---
+### windows 2022
+Windows Server 2022 Datacenter（WX4NM-KYWYW-QJJR4-XV3QB-6VM33）
+Windows Server 2022 Standard（VDYBN-27WPP-V4HQT-9VMD4-VMK7H）
 ---
 ### windows 2019
 windows server 2019 + SN
