@@ -67,6 +67,7 @@ export REDIS_HOME=/data/module/redis7.2
 ## Windows 与虚拟化
 
 - [VMware Workstation 安装与 Windows Server 虚拟机部署教程](windows/VMwareWorkstation安装与WindowsServer虚拟机部署教程.md)
+- [Oracle Database 12c Release 1 在 Windows 上的安装教程](windows/oracle12c.md)
 
 ## 安全与加解密
 

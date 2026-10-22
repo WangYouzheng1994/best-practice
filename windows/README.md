@@ -15,3 +15,4 @@
 ## 文档列表
 
 - [VMware Workstation 安装与 Windows Server 虚拟机部署教程](VMwareWorkstation安装与WindowsServer虚拟机部署教程.md)
+- [Oracle Database 12c Release 1 在 Windows 上的安装教程](oracle12c.md)
